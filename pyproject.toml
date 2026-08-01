@@ -1,0 +1,25 @@
+[project]
+name = "ret2console"
+version = "0.1.0"
+description = "Ret2Shell (回归终端) CTF 比赛平台的终端用户接口"
+license = "GPL-3.0-only"
+requires-python = ">=3.11"
+dependencies = [
+    "prompt-toolkit>=3.0.43",
+    "rich>=13.7",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+ret2console = "ret2console.cli:main"
+r2c = "ret2console.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ret2console"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
