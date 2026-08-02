@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from rich.table import Table
+from ret2console.output import make_table
 
 from ret2console.api.client import ApiError
 from ret2console.commands import Command, register
@@ -55,16 +55,24 @@ async def cmd_challenge_list(app: App, args: list[str]) -> int:
     if not challenges:
         console.print("（暂无题目）")
         return 0
-    table = Table(title=f"比赛 {gid} 题目列表", box=None)
+    from ret2console.vfs_builder import _load_challenge_status
+    solved, running = await _load_challenge_status(app, gid)
+    table = make_table(title=f"比赛 {gid} 题目列表")
     table.add_column("ID", style="bold #5f87d7")
     table.add_column("标题")
     table.add_column("分类", style="dim")
     table.add_column("分值", style="dim")
     for c in challenges:
         cid = c.get("id")
+        title = str(c.get("title") or c.get("name") or cid)
+        if isinstance(cid, int) and cid in solved:
+            title = f"[bold bright_green]{title}[/bold bright_green]"
+        if isinstance(cid, int) and cid in running:
+            from ret2console.output import RUNNING_STAR
+            title = f"{title} {RUNNING_STAR}"
         table.add_row(
             str(cid),
-            str(c.get("title") or c.get("name") or cid),
+            title,
             _challenge_category(c),
             str(c.get("score") or c.get("value") or ""),
         )

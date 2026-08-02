@@ -59,3 +59,27 @@ async def test_parent_path():
     assert vfs.parent_path("/contests/3/challenges/5") == "/contests/3/challenges"
     assert vfs.parent_path("/contests") == "/"
     assert vfs.parent_path("/") == "/"
+
+
+def test_team_org_name_prefers_name_field():
+    from ret2console.vfs_builder import team_org_name
+
+    team = {"name": "XDSEC", "institute_name": "西安电子科技大学", "institute_id": 1}
+    assert team_org_name(team, {1: "西安电子科技大学"}) == "西安电子科技大学"
+
+
+def test_team_org_name_maps_institute_id():
+    """排行榜接口只回传 institute_id（institute_name 为 None），需经映射表。"""
+    from ret2console.vfs_builder import team_org_name
+
+    team = {"name": "星斓音", "institute_id": 3}
+    assert team_org_name(team, {3: "西安电子科技大学"}) == "西安电子科技大学"
+    assert team_org_name(team, None) == ""
+    assert team_org_name(team, {1: "复旦大学"}) == ""  # 未命中不硬猜
+
+
+def test_team_org_name_tolerates_bad_id():
+    from ret2console.vfs_builder import team_org_name
+
+    assert team_org_name({"institute_id": "abc"}, {1: "x"}) == ""
+    assert team_org_name({"institute_id": None}, {}) == ""

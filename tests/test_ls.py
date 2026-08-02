@@ -54,3 +54,27 @@ async def test_ls_recursive(monkeypatch):
     assert code == 0
     text = " ".join(str(x) for x in printed)
     assert "/:" in text and "contests:" in text and "3:" in text
+
+
+def test_render_short_challenge_status():
+    """题目目录状态：已通过绿色、运行中带 *、一般蓝色。"""
+    from rich.text import Text
+    from ret2console.commands.basic import _render_short
+
+    nodes = [
+        dir_node("900", challenge_id=900),
+        dir_node("908", challenge_id=908),
+        dir_node("957", challenge_id=957),
+        dir_node("docs"),
+    ]
+    out = _render_short(nodes, solved={900, 908}, running={908})
+    assert isinstance(out, Text)
+    rendered = out.plain
+    assert "900/" in rendered and "908*/" in rendered and "957/" in rendered
+    styles = {}
+    for s in out.spans:
+        styles[rendered[s.start:s.end]] = s.style
+    assert styles["900/"] == "bold bright_green"
+    assert styles["908*/"] == "bold bright_green"   # 已通过优先，仍带运行中 *
+    assert styles["957/"] == "bold bright_blue"
+    assert styles["docs/"] == "bold bright_blue"

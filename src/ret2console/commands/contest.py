@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from rich.table import Table
+from ret2console.output import make_table
 from rich.text import Text
 
 from ret2console.api.client import ApiError
@@ -48,7 +48,7 @@ async def cmd_contest_list(app: App, args: list[str]) -> int:
     if not games:
         console.print("（暂无比赛）")
         return 0
-    table = Table(title="比赛列表", box=None)
+    table = make_table(title="比赛列表")
     table.add_column("ID", style="bold #5f87d7")
     table.add_column("标题")
     table.add_column("状态", style="dim")
@@ -73,7 +73,7 @@ async def cmd_contest_show(app: App, args: list[str]) -> int:
     gid = game.get("id")
     title = game.get("title") or game.get("name") or f"比赛 {gid}"
     brief = game.get("brief") or game.get("description") or "（无简介）"
-    table = Table(box=None, show_header=False)
+    table = make_table(show_header=False)
     table.add_column("字段", style="dim", width=10)
     table.add_column("值")
     table.add_row("ID", str(gid))

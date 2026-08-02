@@ -11,7 +11,7 @@ import re
 import time
 from datetime import datetime
 
-from rich.table import Table
+from ret2console.output import make_table
 
 from ret2console.api.client import ApiError
 from ret2console.commands import Command, register
@@ -110,7 +110,7 @@ def _items(data) -> list:
 
 
 def _table(title: str, headers: list[str], rows: list[tuple]) -> None:
-    t = Table(title=title, box=None)
+    t = make_table(title=title)
     for i, h in enumerate(headers):
         t.add_column(h, style="bold" if i == 0 else None)
     for row in rows:

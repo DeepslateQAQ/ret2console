@@ -44,6 +44,8 @@ class App:
     # 动态补全缓存：game_id -> {id: 标题}；challenge 缓存挂在 game_id 下
     games_cache: dict[int, str] = field(default_factory=dict)
     challenges_cache: dict[int, dict[int, str]] = field(default_factory=dict)
+    # 机构 id -> 名称（排行榜组织列用；登录后首次拉取缓存）
+    institutes_cache: dict[int, str] = field(default_factory=dict)
     wsrx: Wsrx = field(default_factory=Wsrx)
     # 终端图片协议（kitty / sixel / None），启动时检测一次
     graphics: str | None = None
@@ -62,6 +64,8 @@ class App:
     def set_token(self, token: str | None) -> None:
         self.session.token = token
         self.api.configure(base_url=self.config.api_base, token=token)
+        if token is None:
+            self.institutes_cache = {}
         self.session.save()
 
     @property
@@ -77,6 +81,7 @@ class App:
             insecure=self.config.insecure,
         )
         self.api.reset_client()
+        self.institutes_cache = {}
         self.ctx.set_path("/", None, None)
         self.games_cache.clear()
         self.challenges_cache.clear()

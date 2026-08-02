@@ -6,8 +6,10 @@ import re
 import sys
 from datetime import datetime
 
+from rich import box
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.table import Table
 
 console = Console(force_terminal=sys.stdout.isatty(), highlight=False)
 error_console = Console(stderr=True, force_terminal=sys.stderr.isatty(), highlight=False)
@@ -37,6 +39,19 @@ def looks_like_markdown(text: str) -> bool:
 def render_markdown(text: str) -> Markdown | str:
     """Markdown 内容返回 rich Markdown 对象，纯文本原样返回。"""
     return Markdown(text) if looks_like_markdown(text) else text
+
+
+def make_table(**kwargs) -> Table:
+    """命令输出表格：默认与 Markdown 表格同款边框（SIMPLE 细线 + 贴边）。"""
+    kwargs.setdefault("box", box.SIMPLE)
+    kwargs.setdefault("pad_edge", False)
+    kwargs.setdefault("collapse_padding", True)
+    return Table(**kwargs)
+
+
+# 运行中实例标记（题目列表/表格通用）：橙色星号，与已通过绿色解耦
+RUNNING_STAR_STYLE = "orange1"
+RUNNING_STAR = f"[{RUNNING_STAR_STYLE}]*[/{RUNNING_STAR_STYLE}]"
 
 
 def format_ts(ts) -> str:

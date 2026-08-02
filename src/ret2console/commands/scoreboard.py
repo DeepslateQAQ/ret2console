@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from rich.table import Table
+from ret2console.output import make_table
 
 from ret2console.api.client import ApiError
 from ret2console.commands import Command, register
 from ret2console.output import console
 from ret2console.state import App
+from ret2console.vfs_builder import _load_institutes, team_org_name
 
 
 async def cmd_scoreboard(app: App, args: list[str]) -> int:
@@ -27,14 +28,17 @@ async def cmd_scoreboard(app: App, args: list[str]) -> int:
     if not teams:
         console.print("（暂无排行数据）")
         return 0
-    table = Table(title=f"比赛 {gid} 排行榜（共 {count} 队）", box=None)
-    table.add_column("排名", style="bold")
-    table.add_column("队伍")
-    table.add_column("分数", style="dim")
+    institutes = await _load_institutes(app)
+    table = make_table(title=f"比赛 {gid} 排行榜（共 {count} 队）")
+    table.add_column("#", justify="right", style="bold", no_wrap=True)
+    table.add_column("队名")
+    table.add_column("组织", style="dim")
+    table.add_column("分数", justify="right", no_wrap=True)
     for i, team in enumerate(teams, 1):
         table.add_row(
             str(i),
             str(team.get("name") or team.get("title") or team.get("id") or "?"),
+            team_org_name(team, institutes) or "—",
             str(team.get("score") or 0),
         )
     console.print(table)

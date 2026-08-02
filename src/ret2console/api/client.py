@@ -220,13 +220,18 @@ class ApiClient:
     async def profile(self) -> dict[str, Any]:
         return await self.get_json("/account/profile")
 
+    async def list_institutes(self) -> list[dict[str, Any]]:
+        """机构（归属单位）列表：GET /account/institute，返回 [{id, name, ...}]。
+
+        排行榜接口的 team 对象只有 institute_id（institute_name 仅 /team/self
+        等 get_ex 路径 JOIN 填充），需要这里映射成可读名称。
+        """
+        return _unwrap_list(await self.get_json("/account/institute"))
+
     # ---- 比赛 ----
 
     async def list_games(self, page: int = 1, page_size: int = 50) -> list[dict[str, Any]]:
-        data = await self.get_json(
-            "/game", params={"page": page, "page_size": page_size}
-        )
-        return _unwrap_list(data)
+        return await self._paginate("/game", page_size)
 
     async def get_game(self, game_id: int) -> dict[str, Any]:
         return await self.get_json(f"/game/{game_id}")
@@ -247,10 +252,32 @@ class ApiClient:
     # ---- 题目 ----
 
     async def list_challenges(self, game_id: int, page: int = 1, page_size: int = 100) -> list[dict[str, Any]]:
-        data = await self.get_json(
-            f"/game/{game_id}/challenge", params={"page": page, "page_size": page_size}
-        )
-        return _unwrap_list(data)
+        return await self._paginate(f"/game/{game_id}/challenge", page_size)
+
+    async def _paginate(self, path: str, page_size: int) -> list[dict[str, Any]]:
+        """自动翻页拉取全量列表（r2s 分页响应为 `[items, total]`）。
+
+        题目/比赛多于一页时仅取第一页会丢数据（如 MoeCTF 2025 题量 > 100），
+        这里按 total 或「页不满」判定结束；page_size=100 时上限 100 页兜底。
+        """
+        out: list[dict[str, Any]] = []
+        page = 1
+        while page <= 100:
+            data = await self.get_json(path, params={"page": page, "page_size": page_size})
+            items = _unwrap_list(data)
+            out.extend(items)
+            total = (
+                data[1]
+                if isinstance(data, list) and len(data) == 2 and isinstance(data[0], list) and isinstance(data[1], int)
+                else None
+            )
+            if total is not None:
+                if len(out) >= total or not items:
+                    break
+            elif len(items) < page_size:
+                break
+            page += 1
+        return out
 
     async def get_challenge(self, game_id: int, challenge_id: int) -> dict[str, Any]:
         return await self.get_json(f"/game/{game_id}/challenge/{challenge_id}")
@@ -265,6 +292,10 @@ class ApiClient:
         if isinstance(data, list):
             return data
         return [data] if data else []
+
+    async def list_solves(self, game_id: int) -> list[dict[str, Any]]:
+        """当前队伍已提交记录（GET /game/{gid}/solve），含 solved/challenge_id。"""
+        return _unwrap_list(await self.get_json(f"/game/{game_id}/solve"))
 
     # ---- 提交 ----
 

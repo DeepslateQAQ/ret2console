@@ -87,3 +87,69 @@ async def test_get_game_doc_plain_text_fallback():
         transport=httpx.MockTransport(lambda r: httpx.Response(200, text="# 纯文本"))
     )
     assert await client.get_game_doc(3, "readme") == "# 纯文本"
+
+
+class _FakeResp:
+    def __init__(self, data):
+        self._data = data
+        self.status_code = 200
+        self.headers = {}
+
+    def json(self):
+        return self._data
+
+
+class _FakePagedClient:
+    """记录请求路径与 page 参数，按页返回 `[items, total]`。"""
+
+    def __init__(self, pages: list, total: int):
+        self.pages = pages
+        self.total = total
+        self.requests: list[tuple[str, dict]] = []
+
+    async def request(self, method, path, *, params=None, **kw):
+        self.requests.append((path, dict(params or {})))
+        page = int((params or {}).get("page", 1))
+        items = self.pages[page - 1] if page <= len(self.pages) else []
+        return _FakeResp([items, self.total])
+
+
+def _install_paged_client(monkeypatch, pages, total):
+    fake = _FakePagedClient(pages, total)
+    monkeypatch.setattr("ret2console.api.client.httpx.AsyncClient", lambda *a, **kw: fake)
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_paginate_fetches_all_pages(monkeypatch):
+    pages = [[{"id": i} for i in range(1, 101)], [{"id": i} for i in range(101, 201)], [{"id": i} for i in range(201, 251)]]
+    fake = _install_paged_client(monkeypatch, pages, 250)
+    client = ApiClient(base_url="https://ctf.xidian.edu.cn/api")
+    items = await client.list_challenges(22)
+    assert len(items) == 250
+    assert [p for _, p in fake.requests] == [
+        {"page": 1, "page_size": 100}, {"page": 2, "page_size": 100}, {"page": 3, "page_size": 100},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_paginate_stops_at_exact_total(monkeypatch):
+    pages = [[{"id": i} for i in range(101, 201)]]
+    fake = _install_paged_client(monkeypatch, pages, 100)
+    client = ApiClient(base_url="https://ctf.xidian.edu.cn/api")
+    items = await client.list_challenges(22)
+    assert len(items) == 100
+    assert len(fake.requests) == 1  # total=100 恰好一页，不再请求第二页
+
+
+@pytest.mark.asyncio
+async def test_paginate_falls_back_to_short_page(monkeypatch):
+    """后端不返回 total（普通 list 响应）时，以「页不满」判定结束。"""
+    pages = [[{"id": i} for i in range(1, 61)]]
+    monkeypatch.setattr(
+        "ret2console.api.client.httpx.AsyncClient",
+        lambda *a, **kw: _FakePagedClient(pages, total=None),
+    )
+    client = ApiClient(base_url="https://ctf.xidian.edu.cn/api")
+    items = await client.list_challenges(22)
+    assert len(items) == 60

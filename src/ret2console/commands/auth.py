@@ -6,7 +6,7 @@ import json
 import re
 import shutil
 
-from rich.table import Table
+from ret2console.output import make_table
 
 from ret2console.api.client import ApiError
 from ret2console.commands import Command, register
@@ -159,7 +159,7 @@ async def cmd_auth_profile(app: App, args: list[str]) -> int:
     """多 profile 管理：每个 profile 独立保存凭证与 API endpoint。"""
     sub = args[0] if args else "list"
     if sub in ("list", "ls"):
-        table = Table(box=None)
+        table = make_table()
         table.add_column("profile", style="bold")
         table.add_column("endpoint")
         table.add_column("登录", style="dim")

@@ -13,6 +13,65 @@ from ret2console.output import format_ts
 from ret2console.vfs import VfsError
 
 
+def team_org_name(team: dict, institutes: dict[int, str] | None = None) -> str:
+    """从队伍对象提取组织/单位显示名。
+
+    优先取名字字段（/team/self 等 JOIN 路径），否则按 institute_id 查映射
+    （排行榜列表只回传 id，名字需经 /account/institute 映射）。
+    """
+    for k in ("institute_name", "institute", "organization", "org", "school"):
+        v = team.get(k)
+        if v:
+            return str(v)
+    iid = team.get("institute_id")
+    if institutes and iid is not None:
+        try:
+            return institutes.get(int(iid), "")
+        except (TypeError, ValueError):
+            return ""
+    return ""
+
+
+def _md_cell(text: str) -> str:
+    """Markdown 表格单元格转义：竖线转义、换行折叠。"""
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
+async def _load_institutes(app: App) -> dict[int, str]:
+    """拉取 institute id→名称 映射并缓存；失败回退为空（组织列显示 —）。"""
+    if app.institutes_cache:
+        return app.institutes_cache
+    try:
+        data = await app.api.list_institutes()
+        app.institutes_cache = {
+            int(i["id"]): str(i.get("name") or i["id"])
+            for i in data
+            if i.get("id") is not None
+        }
+    except Exception:
+        app.institutes_cache = {}
+    return app.institutes_cache
+
+
+async def _load_challenge_status(app: App, gid: int) -> tuple[set[int], set[int]]:
+    """拉取题目状态：已通过题目集合 / 运行中实例集合（失败回退空，未登录同理）。"""
+    solved: set[int] = set()
+    running: set[int] = set()
+    try:
+        for s in await app.api.list_solves(gid):
+            if isinstance(s, dict) and s.get("solved") and s.get("challenge_id") is not None:
+                solved.add(int(s["challenge_id"]))
+    except Exception:
+        pass
+    try:
+        for i in await app.api.list_instances(gid):
+            if isinstance(i, dict) and i.get("challenge_id") is not None:
+                running.add(int(i["challenge_id"]))
+    except Exception:
+        pass
+    return solved, running
+
+
 async def _load_games(app: App) -> list[Node]:
     games = await app.api.list_games()
     cache: dict[int, str] = {}
@@ -156,9 +215,18 @@ async def _game_scoreboard(app: App, gid: int) -> str:
     teams, count = data if isinstance(data, list) and len(data) == 2 else (data if isinstance(data, list) else [], 0)
     if not teams:
         return "（暂无排行数据）"
-    lines = [f"比赛 {gid} 排行榜（共 {count} 队）", ""]
+    institutes = await _load_institutes(app)
+    lines = [
+        f"**比赛 {gid} 排行榜（共 {count} 队）**",
+        "",
+        "| # | 队名 | 组织 | 分数 |",
+        "| --- | --- | --- | --- |",
+    ]
     for i, team in enumerate(teams, 1):
-        lines.append(f"{i:>3}. {team.get('name') or team.get('title') or team.get('id') or '?'}  {team.get('score') or 0} 分")
+        name = team.get("name") or team.get("title") or team.get("id") or "?"
+        lines.append(
+            f"| {i} | {_md_cell(name)} | {_md_cell(team_org_name(team, institutes)) or '—'} | {team.get('score') or 0} |"
+        )
     return "\n".join(lines)
 
 

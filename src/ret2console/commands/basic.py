@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from rich.table import Table
+from ret2console.output import make_table
 
 from ret2console.commands import EXIT_CODE, Command, REGISTRY, commands_by_category, register
 from ret2console.output import console
@@ -19,7 +19,7 @@ async def cmd_help(app: App, args: list[str]) -> int:
         print_cmd_help(cmd)
         return 0
     for category, cmds in commands_by_category().items():
-        table = Table(title=category, show_header=False, box=None, padding=(0, 2))
+        table = make_table(title=category, show_header=False, padding=(0, 2))
         for cmd in sorted(cmds, key=lambda c: c.name):
             table.add_row(f"[bold]{cmd.name}[/bold]", f"[dim]{cmd.usage}[/dim]", cmd.description)
         console.print(table)
@@ -80,13 +80,19 @@ async def cmd_ls(app: App, args: list[str]) -> int:
     except VfsError as e:
         console.print(f"[red]✗ {e}[/red]")
         return 1
+    solved, running = set(), set()
+    if any(n.challenge_id is not None for n in nodes):
+        from ret2console.vfs_builder import _load_challenge_status
+        gid = next((n.game_id for n in nodes if n.challenge_id is not None), None)
+        if gid is not None:
+            solved, running = await _load_challenge_status(app, gid)
     if long_format:
-        return _render_long(app, nodes)
+        return _render_long(app, nodes, solved=solved, running=running)
     if recursive:
-        return await _render_recursive(app, path, nodes)
+        return await _render_recursive(app, path, nodes, solved=solved, running=running)
     if not nodes:
         return 0
-    console.print(_render_short(nodes))
+    console.print(_render_short(nodes, solved=solved, running=running))
     return 0
 
 
@@ -99,15 +105,32 @@ def _file_style(n) -> str | None:
     return None
 
 
-def _render_short(nodes: list):
-    """短格式：目录蓝色、特殊文件金色/红色、一般文件默认色。"""
+def _challenge_style(n, solved: set[int], running: set[int]) -> str:
+    """题目目录样式：已通过绿色，运行中金色，一般蓝色。"""
+    if n.challenge_id in solved:
+        return "bold bright_green"
+    if n.challenge_id in running:
+        return "bold bright_yellow"
+    return "bold bright_blue"
+
+
+def _render_short(nodes: list, solved: set[int] | None = None, running: set[int] | None = None):
+    """短格式：目录蓝色、特殊文件金色/红色、一般文件默认色；题目目录带状态。"""
+    solved = solved or set()
+    running = running or set()
+    from ret2console.output import RUNNING_STAR_STYLE
     from rich.text import Text
     dirs = [n for n in nodes if n.kind == "dir"]
     files = [n for n in nodes if n.kind == "file"]
     parts: list[Text] = []
     for n in dirs:
-        t = Text(n.name, style="bold bright_blue")
-        t.append("/", style="bold bright_blue")
+        style = "bold bright_blue"
+        if n.challenge_id is not None:
+            style = _challenge_style(n, solved, running)
+        t = Text(n.name, style=style)
+        if n.challenge_id is not None and n.challenge_id in running:
+            t.append("*", style=RUNNING_STAR_STYLE)
+        t.append("/", style=style)
         parts.append(t)
     for n in files:
         style = _file_style(n)
@@ -115,12 +138,16 @@ def _render_short(nodes: list):
     return Text("  ").join(parts)
 
 
-async def _render_recursive(app: App, path: str, nodes: list) -> int:
+async def _render_recursive(
+    app: App, path: str, nodes: list, solved: set[int] | None = None, running: set[int] | None = None
+) -> int:
     """ls -R 递归目录树：目录头 + 子项（懒加载逐层展开）。"""
+    solved = solved or set()
+    running = running or set()
     header = path if path != "/" else "/"
     console.print(f"[bold]{header}:[/bold]")
     if nodes:
-        console.print(_render_short(nodes))
+        console.print(_render_short(nodes, solved=solved, running=running))
     for n in nodes:
         if n.kind != "dir":
             continue
@@ -130,24 +157,34 @@ async def _render_recursive(app: App, path: str, nodes: list) -> int:
         except VfsError as e:
             console.print(f"[red]✗ {e}[/red]")
             continue
+        sub_solved, sub_running = solved, running
+        if any(c.challenge_id is not None for c in children):
+            from ret2console.vfs_builder import _load_challenge_status
+            gid = next((c.game_id for c in children if c.challenge_id is not None), None)
+            if gid is not None:
+                sub_solved, sub_running = await _load_challenge_status(app, gid)
         console.print()
-        await _render_recursive(app, sub, children)
+        await _render_recursive(app, sub, children, solved=sub_solved, running=sub_running)
     return 0
 
 
-def _render_long(app: App, nodes: list) -> int:
+def _render_long(app: App, nodes: list, solved: set[int] | None = None, running: set[int] | None = None) -> int:
     """ls -l 长格式：类型 + 名称 + 元信息（id/标题，来自缓存）。"""
-    from rich.table import Table
-    table = Table(box=None, show_header=False, pad_edge=False)
+    solved = solved or set()
+    running = running or set()
+    from ret2console.output import make_table
+    table = make_table(show_header=False, pad_edge=False)
     table.add_column("", width=2)
     table.add_column("名称")
     table.add_column("信息", style="dim")
     for n in nodes:
         kind = "d" if n.kind == "dir" else "f"
-        name = n.name + ("/" if n.kind == "dir" else "")
         if n.kind == "dir":
-            name = f"[bold bright_blue]{name}[/bold bright_blue]"
-            kind = "[bold bright_blue]d[/bold bright_blue]"
+            style = _challenge_style(n, solved, running) if n.challenge_id is not None else "bold bright_blue"
+            from ret2console.output import RUNNING_STAR
+            star = RUNNING_STAR if n.challenge_id is not None and n.challenge_id in running else ""
+            name = f"[{style}]{n.name}{star}[/{style}]/"
+            kind = f"[{style}]d[/{style}]"
         elif style := _file_style(n):
             name = f"[{style}]{name}[/{style}]"
             kind = f"[{style}]f[/{style}]"
