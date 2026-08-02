@@ -85,6 +85,37 @@ $ nix run github:AstralFlare-owo/ret2console
 
 项目的设计说明位于 [SPEC.md](SPEC.md)，可提供给 Agent 进行参考。
 
+环境依赖使用 uv 进行管理，您可运行以下命令一键配置环境：
+
+```bash
+$ uv sync
+```
+
+### 构建
+
+若需要构建出单二进制文件分发版本，可使用 Nuitka 进行构建，命令如下：
+
+```bash
+$ uv run --group build nuitka \
+    --onefile --assume-yes-for-downloads \
+    --no-deployment-flag=self-execution \
+    --output-filename=dist/ret2console \
+    --remove-output --jobs="$(nproc)" \
+    src/ret2console/cli.py
+```
+
+构建出的产物位于 `dist/ret2console` 内。
+
+建议的构建环境为 Ubuntu 22.04，其 glibc 版本为 2.35，支持大部分 glibc 版本高于 2.34 的发行版。
+
+您也可以使用容器在可控环境内进行构建：
+
+```bash
+$ ./scripts/build-in-container.sh
+```
+
+如需重建容器环境（例如换构建基线镜像后）可加 `--cleanup` 参数。
+
 ## 相关项目
 
  - [Ret2Shell](https://github.com/Ret2Shell/Ret2Shell) - 特性丰富的夺旗赛平台

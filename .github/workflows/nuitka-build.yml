@@ -1,0 +1,64 @@
+name: 使用 Nuitka 构建 R2C 二进制
+
+on:
+  workflow_dispatch:
+  push:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nuitka-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nuitka:
+    runs-on: ubuntu-22.04 # glibc >= 2.34
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq patchelf ccache
+
+      - name: Sync project deps (incl. build group)
+        run: uv sync --frozen --no-dev --group build
+
+      - name: Restore Nuitka / ccache caches
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/Nuitka
+            ~/.cache/ccache
+          key: nuitka-${{ runner.os }}-${{ hashFiles('src/ret2console/**', 'pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            nuitka-${{ runner.os }}-
+
+      - name: Build single-file binary with Nuitka
+        run: |
+          mkdir -p dist
+          uv run nuitka \
+            --onefile \
+            --assume-yes-for-downloads \
+            --no-deployment-flag=self-execution \
+            --output-filename=dist/ret2console \
+            --remove-output \
+            --jobs="$(nproc)" \
+            src/ret2console/cli.py
+
+      - name: Check build artifact
+        run: |
+          ./dist/ret2console -c "pwd; echo nuitka-build-ok"
+          ls -lh dist/ret2console
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ret2console-nuitka-linux-x86_64
+          path: dist/ret2console
+          if-no-files-found: error
