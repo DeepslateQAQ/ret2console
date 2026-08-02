@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from rich.text import Text
@@ -11,23 +12,45 @@ from ret2console.commands import Command, register
 from ret2console.commands.basic import _resolve_path
 from ret2console.output import console, render_markdown
 from ret2console.state import App
+from ret2console.termimg import (
+    extract_images,
+    is_image_name,
+    resolve_media_url,
+    show_image,
+)
 from ret2console.vfs import VfsError
 
 
 async def cmd_cat(app: App, args: list[str]) -> int:
-    if not args:
+    raw = "--raw" in args
+    paths = [a for a in args if a != "--raw"]
+    if not paths:
         # 无参：若在题目上下文内，等价 challenge show（SPEC §9 彩蛋语义）
         if app.ctx.challenge_id is not None:
             from ret2console.commands.challenge import cmd_challenge_show
             return await cmd_challenge_show(app, [])
         console.print("[red]用法: cat <虚拟文件路径>[/red]")
         return 1
-    path = _resolve_path(app, args[0])
+    path = _resolve_path(app, paths[0])
     try:
         text = await app.vfs.read(path)
     except VfsError as e:
         console.print(f"[red]✗ cat: {e}[/red]")
         return 1
+    if raw:
+        console.print(text)
+        return 0
+    if app.graphics:
+        # Markdown 里的图片：取链接下载并渲染，成功后从文本中移除（失败保留 🌆 占位）
+        for alt, url in extract_images(text):
+            try:
+                resp = await app.api._request("GET", resolve_media_url(url, app.api.base_url))
+                ok = show_image(resp.content, app.graphics, console.width) if resp.content else False
+            except Exception:
+                ok = False
+            if not ok:
+                continue
+            text = text.replace(f"![{alt}]({url})", "", 1)
     console.print(render_markdown(text))
     return 0
 
@@ -74,5 +97,5 @@ async def cmd_download(app: App, args: list[str]) -> int:
 
 
 def register_files() -> None:
-    register(Command("cat", cmd_cat, usage="cat <文件路径>", description="读取虚拟文件（题目目录内无参 = 显示题面）", category="文件系统"))
+    register(Command("cat", cmd_cat, usage="cat [--raw] <文件路径>", description="读取虚拟文件（--raw 输出原始 Markdown；题目目录内无参 = 显示题面）", category="文件系统"))
     register(Command("download", cmd_download, usage="download [题目id] <文件名>", description="下载附件到当前目录（zip 等压缩包请用此命令）", category="附件", aliases=("wget",)))

@@ -33,9 +33,9 @@ def test_resolve_path():
 
 def test_file_style_colors():
     """特殊文件金色/红色，一般文件默认色。"""
-    assert _file_style(file_node("flag", reader=lambda: "")) == "bold ansiyellow"
-    assert _file_style(file_node("instance", reader=lambda: "")) == "bold ansiyellow"
-    assert _file_style(file_node("a.zip", reader=lambda: "")) == "bold ansired"
+    assert _file_style(file_node("flag", reader=lambda: "")) == "bold bright_yellow"
+    assert _file_style(file_node("instance", reader=lambda: "")) == "bold bright_yellow"
+    assert _file_style(file_node("a.zip", reader=lambda: "")) == "bold bright_red"
     assert _file_style(file_node("README", reader=lambda: "")) is None
 
 

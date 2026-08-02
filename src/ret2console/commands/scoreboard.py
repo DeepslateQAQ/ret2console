@@ -1,4 +1,4 @@
-"""排行榜命令：scoreboard（GET /api/game/{id}/team?min_state=passed&order=score&asc=false）。"""
+"""排行榜命令：scoreboard（GET /api/game/{id}/team?min_state=3&order=score&asc=false）。"""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ async def cmd_scoreboard(app: App, args: list[str]) -> int:
     try:
         data = await app.api.get_json(
             f"/game/{gid}/team",
-            params={"min_state": "passed", "order": "score", "asc": False, "page": 1, "page_size": 20},
+            params={"min_state": 3, "order": "score", "asc": False, "page": 1, "page_size": 20},
         )
     except ApiError as e:
         console.print(f"[red]✗ {e.message}[/red]")

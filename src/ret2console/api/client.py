@@ -68,15 +68,16 @@ class ApiClient:
         """
         self._client = None
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, *, auth: bool = True) -> dict[str, str]:
         headers = {"User-Agent": "ret2console/0.1"}
-        if self.token:
+        if auth and self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         return headers
 
     async def _request(
         self, method: str, path: str, *, params: dict[str, Any] | None = None,
         json: Any = None, content: bytes | None = None, files: Any = None,
+        auth: bool = True,
     ) -> httpx.Response:
         if self._client is None:
             self._client = httpx.AsyncClient(
@@ -90,7 +91,7 @@ class ApiClient:
                     warnings.filterwarnings("ignore", message="Unverified HTTPS request")
         resp = await self._client.request(
             method, path, params=params, json=json, content=content,
-            files=files, headers=self._headers(),
+            files=files, headers=self._headers(auth=auth),
         )
         # 监听 Set-Token 续期（SPEC §4.2 关键坑）
         new_token = resp.headers.get("set-token")
@@ -99,6 +100,17 @@ class ApiClient:
             if self.on_token:
                 self.on_token(new_token)
         if resp.status_code >= 400:
+            if (
+                resp.status_code == 401
+                and self.token
+                and path not in ("/account/login", "/account/register")
+            ):
+                # 服务端已吊销/过期当前 token：本地立即失效，避免各处报
+                # 裸 `please login first` 且 auth login 被「已登录」挡住。
+                self.token = None
+                if self.on_token:
+                    self.on_token(None)
+                raise ApiError("登录态已失效（已在其他设备登出或已过期），请重新 auth login", 401)
             raise self._error(resp)
         return resp
 
@@ -181,6 +193,7 @@ class ApiClient:
                 "captcha_id": captcha_id,
                 "captcha_answer": captcha_answer,
             },
+            auth=False,
         )
         return {"token": self.token}  # token 已通过 Set-Token 头回调
 
@@ -198,6 +211,7 @@ class ApiClient:
                 "captcha_id": captcha_id,
                 "captcha_answer": captcha_answer,
             },
+            auth=False,
         )
 
     async def logout(self) -> None:
@@ -219,7 +233,12 @@ class ApiClient:
 
     async def get_game_doc(self, game_id: int, doc_type: str) -> str:
         resp = await self._request("GET", f"/game/{game_id}/doc/{doc_type}")
-        return resp.text
+        # 后端返回 Json(content)：响应体是 JSON 编码的字符串（\n 为转义字面量）
+        try:
+            data = resp.json()
+        except Exception:
+            return resp.text
+        return data if isinstance(data, str) else resp.text
 
     async def get_notifications(self, game_id: int) -> list[dict[str, Any]]:
         data = await self.get_json(f"/game/{game_id}/notification")

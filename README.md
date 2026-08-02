@@ -78,6 +78,11 @@ $ nix run github:AstralFlare-owo/ret2console
 
 项目的设计说明位于 [SPEC.md](SPEC.md)，可提供给 Agent 进行参考。
 
+## 相关项目
+
+ - [Ret2Shell](https://github.com/Ret2Shell/Ret2Shell) - 特性丰富的夺旗赛平台
+ - [ret2cli](https://github.com/LyCecilion/ret2cli) - Ret2Shell CTF 平台的 CLI 客户端（第三方）
+
 ## 开源协议 / LICENSE
 
 本项目基于 GNU General Public License V3 授权。

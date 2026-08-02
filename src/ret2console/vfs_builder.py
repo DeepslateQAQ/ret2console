@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable
 
+from ret2console.output import console
 from ret2console.state import App
+from ret2console.termimg import is_image_name, show_image
 from ret2console.vfs import Node, dir_node, file_node
+from ret2console.api.client import ApiError
+from ret2console.output import format_ts
+from ret2console.vfs import VfsError
 
 
 async def _load_games(app: App) -> list[Node]:
@@ -53,7 +58,11 @@ def _docs_loader(app: App, gid: int) -> Callable[[], Awaitable[list[Node]]]:
 
 
 async def _challenges_loader(app: App, gid: int) -> list[Node]:
-    challenges = await app.api.list_challenges(gid)
+    try:
+        challenges = await app.api.list_challenges(gid)
+    except ApiError as e:
+        msg = _friendly(e.message, gid)
+        raise VfsError(msg) from e
     cache: dict[int, str] = {}
     nodes: list[Node] = []
     for c in challenges:
@@ -65,6 +74,18 @@ async def _challenges_loader(app: App, gid: int) -> list[Node]:
         nodes.append(dir_node(str(cid), game_id=gid, challenge_id=int(cid), meta=title, loader=_challenge_loader(app, gid, int(cid))))
     app.challenges_cache[gid] = cache
     return nodes
+
+
+def _friendly(message: str, gid: int) -> str:
+    """把 r2s 常见 API 错误翻译成用户能看懂的提示。"""
+    msg = message or ""
+    if "game has not started" in msg:
+        return f"比赛 {gid} 尚未开始，暂不能查看题目"
+    if "game has ended" in msg:
+        return f"比赛 {gid} 已结束"
+    if "login" in msg.lower():
+        return "需要登录：auth login"
+    return f"题目加载失败: {msg}"
 
 
 def _challenge_loader(app: App, gid: int, cid: int) -> Callable[[], Awaitable[list[Node]]]:
@@ -93,6 +114,17 @@ def _files_loader(app: App, gid: int, cid: int) -> Callable[[], Awaitable[list[N
 async def _file_reader(app: App, gid: int, cid: int, f: dict) -> str:
     name = str(f.get("file") or f.get("name") or "?")
     folder = str(f.get("folder") or "?")
+    if is_image_name(name) and app.graphics:
+        try:
+            resp = await app.api._request(
+                "GET", f"/game/{gid}/challenge/{cid}/file",
+                params={"folder": f.get("folder"), "file": name},
+            )
+            ok = show_image(resp.content, app.graphics, console.width) if resp.content else False
+        except Exception:
+            ok = False
+        if ok:
+            return f"（图片附件 {name} 已渲染，可用 download 保存）"
     if name.endswith((".zip", ".tar", ".gz", ".7z", ".rar", ".xz")):
         return f"压缩包附件 {name}（{folder}）：请使用 download 命令下载（cat 不直接输出二进制）"
     return f"附件 {name}（{folder}）：请使用 download 命令下载"
@@ -112,14 +144,14 @@ async def _game_notice(app: App, gid: int) -> str:
         return "（暂无比赛通知）"
     lines = []
     for n in notices:
-        lines.append(f"**{n.get('title') or '通知'}**  {n.get('created_at', '')}\n{n.get('content') or n.get('text') or ''}")
+        lines.append(f"**{n.get('title') or '通知'}**  {format_ts(n.get('published_at', n.get('created_at', '')))}\n{n.get('content') or n.get('text') or ''}")
     return "\n\n".join(lines)
 
 
 async def _game_scoreboard(app: App, gid: int) -> str:
     data = await app.api.get_json(
         f"/game/{gid}/team",
-        params={"min_state": "passed", "order": "score", "asc": False, "page": 1, "page_size": 20},
+        params={"min_state": 3, "order": "score", "asc": False, "page": 1, "page_size": 20},
     )
     teams, count = data if isinstance(data, list) and len(data) == 2 else (data if isinstance(data, list) else [], 0)
     if not teams:
@@ -137,7 +169,15 @@ async def _team_info(app: App, gid: int) -> str:
         return "（未加入队伍，或比赛未开放队伍查询）"
     if not team:
         return "（未加入队伍）"
-    return f"队伍: {team.get('name') or team.get('id')}\n队长: {team.get('leader') or team.get('captain') or '?'}\n简介: {team.get('description') or '—'}"
+    state = {0: "封禁", 1: "待审核", 2: "隐藏", 3: "已通过"}.get(int(team.get("state") or 3), team.get("state"))
+    lines = [f"队伍: {team.get('name') or team.get('id')}", f"状态: {state}  积分: {team.get('score', 0)}"]
+    if team.get("tag"):
+        lines.append(f"tag: {team['tag']}")
+    if team.get("institute_name"):
+        lines.append(f"单位: {team['institute_name']}")
+    if team.get("token"):
+        lines.append(f"邀请 token: {team['token']}")
+    return "\n".join(lines)
 
 
 async def _challenge_readme(app: App, gid: int, cid: int) -> str:
@@ -181,7 +221,7 @@ async def _instance_info(app: App, gid: int, cid: int) -> str:
             lines.append(f"tunnel: {tunnel_status(app.wsrx, str(inst['traffic']))}")
         if inst.get("ports"):
             lines.append(f"ports: {', '.join(map(str, inst['ports']))}")
-        lines.append(f"renew: {inst.get('renew_count', 0)}  created: {inst.get('created_at', '')}")
+        lines.append(f"renew: {inst.get('renew_count', 0)}  created: {format_ts(inst.get('created_at', ''))}")
     return "\n".join(lines)
 
 
@@ -204,7 +244,7 @@ async def _bulletin(app: App) -> str:
         if not isinstance(a, dict):
             continue
         title = a.get("title") or "公告"
-        created = a.get("created_at", "")
+        created = format_ts(a.get("created_at", ""))
         content = a.get("content") or ""
         lines.append(f"**{title}**  {created}\n{content}")
     return "\n\n".join(lines)

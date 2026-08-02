@@ -109,8 +109,11 @@ async def cmd_team_info(app: App, args: list[str]) -> int:
     try:
         team = await app.api.get_json(f"/game/{gid}/team/self")
     except ApiError as e:
-        console.print(f"[red]✗ {e.message}[/red]")
-        return 1
+        if "not found" in (e.message or "").lower():
+            team = None
+        else:
+            console.print(f"[red]✗ {e.message}[/red]")
+            return 1
     if not team:
         console.print("[yellow]! 尚未加入队伍（team create <名字> 或 team join <token>）[/yellow]")
         return 1

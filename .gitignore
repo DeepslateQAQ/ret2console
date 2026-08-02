@@ -9,3 +9,5 @@ build/
 .marscode/
 *.bak
 .marscode/
+result
+result-*

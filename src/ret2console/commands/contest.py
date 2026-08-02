@@ -2,19 +2,39 @@
 
 from __future__ import annotations
 
+import time
+
 from rich.table import Table
 from rich.text import Text
 
 from ret2console.api.client import ApiError
 from ret2console.commands import Command, register
-from ret2console.output import console, render_markdown
+from ret2console.output import console, format_ts, render_markdown
 from ret2console.state import App
+
+
+def _game_status(game: dict) -> str:
+    """r2s 无 state 字段，按报名/开赛/结束时间计算状态。"""
+    now = int(time.time())
+    try:
+        start = int(game.get("start_at") or 0)
+        end = int(game.get("end_at") or 0)
+        register = int(game.get("register_at") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if start and end and start <= now < end:
+        return "进行中"
+    if end and now >= end:
+        return "已结束"
+    if start and now < start:
+        return "未开始" if (not register or now >= register) else "未开放报名"
+    return ""
 
 
 def _fmt_game(game: dict) -> tuple[str, str, str]:
     gid = game.get("id")
     title = game.get("title") or game.get("name") or f"比赛 {gid}"
-    status = str(game.get("state") or game.get("status") or "")
+    status = _game_status(game)
     return str(gid), str(title), status
 
 
@@ -41,20 +61,28 @@ async def cmd_contest_list(app: App, args: list[str]) -> int:
 
 async def cmd_contest_show(app: App, args: list[str]) -> int:
     if not args:
-        console.print("[red]用法: contest show <id>[/red]")
-        return 1
+        if app.ctx.game_id is None:
+            console.print("[red]用法: contest show <id>[/red]")
+            return 1
+        args = [str(app.ctx.game_id)]
     try:
         game = await app.api.get_game(int(args[0]))
     except (ValueError, ApiError) as e:
         console.print(f"[red]✗ {getattr(e, 'message', e)}[/red]")
         return 1
     gid = game.get("id")
+    title = game.get("title") or game.get("name") or f"比赛 {gid}"
+    brief = game.get("brief") or game.get("description") or "（无简介）"
     table = Table(box=None, show_header=False)
     table.add_column("字段", style="dim", width=10)
     table.add_column("值")
-    for key, label in (("id", "ID"), ("title", "标题"), ("description", "简介"), ("state", "状态")):
-        if game.get(key) is not None:
-            table.add_row(label, str(game[key]))
+    table.add_row("ID", str(gid))
+    table.add_row("标题", str(title))
+    table.add_row("状态", _game_status(game) or "—")
+    table.add_row("简介", str(brief))
+    start = format_ts(game.get("start_at"))
+    end = format_ts(game.get("end_at"))
+    table.add_row("时间", f"{start} ~ {end}" if start != "None" else "—")
     console.print(table)
     if gid is not None:
         console.print(f"[dim]提示: cd /contests/{gid} 进入该比赛上下文[/dim]")
@@ -108,7 +136,7 @@ async def cmd_contest_notice(app: App, args: list[str]) -> int:
     for n in notices:
         title = n.get("title") or "通知"
         content = n.get("content") or n.get("text") or ""
-        console.print(f"[bold]{title}[/bold] [dim]({n.get('created_at', '')})[/dim]")
+        console.print(f"[bold]{title}[/bold] [dim]({format_ts(n.get('published_at', n.get('created_at', '')))})[/dim]")
         if content:
             console.print(render_markdown(content))
         console.print()

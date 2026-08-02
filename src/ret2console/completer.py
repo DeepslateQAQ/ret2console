@@ -88,8 +88,8 @@ class Ret2ConsoleCompleter(Completer):
     def _path_candidates(self, cmd: str, before: list[str], word: str) -> list[tuple[str, str | None]]:
         if self._vfs is None:
             return []
-        # 目录/文件类命令补路径；其他命令不补
-        if cmd not in self._PATH_COMMANDS and len(before) > 1:
+        # 仅 cd/ls/cat/download 补路径；其他命令（challenge/auth/...）不补
+        if cmd not in self._PATH_COMMANDS:
             return []
         if word.startswith("/"):
             base, prefix = _split_path_word(word)

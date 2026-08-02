@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application.application import Application
 from prompt_toolkit.completion import ThreadedCompleter
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
@@ -134,10 +135,21 @@ async def dispatch_single(app: App, line: str) -> int:
     if cmd is None:
         console.print(f"[red]r2c: command not found: {args[0]}[/red]")
         return 127
+    if any(a in ("-h", "--help") for a in args[1:]):
+        from ret2console.commands.basic import print_cmd_help
+        print_cmd_help(cmd)
+        return 0
     return await cmd.handler(app, args[1:])
 
 
+def _silence_cpr_warning() -> None:
+    """prompt_toolkit 在不支持 CPR 的终端会打印一条英文 WARNING，
+    替换为 no-op（CPR 标记 NOT_SUPPORTED 的逻辑仍在 renderer 里）。"""
+    Application.cpr_not_supported_callback = lambda self: None  # type: ignore[method-assign]
+
+
 async def run_repl(app: App, history_path: str | None = None) -> int:
+    _silence_cpr_warning()
     if history_path is None:
         history_path = str(Path.home() / ".ret2console" / HISTORY_FILE)
         Path(history_path).parent.mkdir(parents=True, exist_ok=True)
@@ -197,7 +209,7 @@ _SUBCOMMANDS: dict[str, list[str]] = {
     "auth": ["login", "logout", "register", "status", "endpoint"],
     "contest": ["list", "show", "use", "doc", "notice"],
     "challenge": ["list", "show", "hint", "unlock", "start", "instance", "connect", "disconnect", "stop", "renew"],
-    "team": ["create", "join", "info", "rank", "member", "solve", "leave"],
+    "team": ["create", "join", "modify", "info", "rank", "member", "solve", "leave"],
     "admin": ["bulletin", "user", "game", "challenge", "platform", "cluster"],
     "admin bulletin": ["list", "show", "create", "update", "delete"],
     "admin user": ["list", "show", "update", "delete", "ip"],

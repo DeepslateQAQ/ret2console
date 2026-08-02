@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sys
+from datetime import datetime
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -36,3 +37,11 @@ def looks_like_markdown(text: str) -> bool:
 def render_markdown(text: str) -> Markdown | str:
     """Markdown 内容返回 rich Markdown 对象，纯文本原样返回。"""
     return Markdown(text) if looks_like_markdown(text) else text
+
+
+def format_ts(ts) -> str:
+    """unix 秒时间戳 → 本地时间（%Y-%m-%d %H:%M）；非时间戳原样返回。"""
+    try:
+        return datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError, OSError):
+        return str(ts)

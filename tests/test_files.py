@@ -53,6 +53,24 @@ async def test_cat_renders_markdown_meta_file(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cat_raw_outputs_plain_markdown(tmp_path, monkeypatch):
+    """cat --raw 原样输出 Markdown，不做渲染。"""
+    from ret2console.vfs import file_node
+    from ret2console.commands import files as files_mod
+
+    monkeypatch.chdir(tmp_path)
+    app = _build_app()
+    app.vfs.root.children = [
+        file_node("readme", reader=lambda: "**原始内容**\n\n- 列表项")
+    ]
+    seen = []
+    monkeypatch.setattr(files_mod, "render_markdown", lambda t: seen.append(t) or t)
+    code = await dispatch(app, "cat --raw /readme")
+    assert code == 0
+    assert seen == []  # 未走渲染
+
+
+@pytest.mark.asyncio
 async def test_cat_without_args_shows_challenge(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     app = _build_app()

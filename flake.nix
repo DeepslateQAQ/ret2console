@@ -22,6 +22,7 @@
             prompt-toolkit
             rich
             httpx
+            pillow
           ];
           # 测试在 devShell 里用 uv run pytest 跑（本机另有完整测试套件）
           doCheck = false;

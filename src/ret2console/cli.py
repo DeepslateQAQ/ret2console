@@ -14,6 +14,7 @@ from ret2console.commands.basic import register_basic
 from ret2console.commands.challenge import register_challenge
 from ret2console.commands.contest import register_contest
 from ret2console.commands.files import register_files
+from ret2console.commands.man import register_man
 from ret2console.commands.scoreboard import register_scoreboard
 from ret2console.commands.shell import register_shell
 from ret2console.commands.submit import register_submit
@@ -21,6 +22,7 @@ from ret2console.commands.team import register_team
 from ret2console.output import console, is_tty
 from ret2console.repl import dispatch, run_repl
 from ret2console.state import App
+from ret2console.termimg import detect_protocol
 from ret2console.vfs_builder import build_vfs
 from ret2console.wsrx import ensure_wsrx, register_control_source, stop_daemon, wsrx_origin
 
@@ -48,6 +50,7 @@ def _register_all() -> None:
     register_submit()
     register_scoreboard()
     register_files()
+    register_man()
     register_team()
     register_shell()
     register_autoplay()
@@ -100,6 +103,9 @@ async def _run(mode: str, payload: list[str]) -> int:
                 console.print(f"[dim]wsrx-desktop（127.0.0.1:{app.wsrx.api_port}）已检测到（控制源未授权，隧道仍可建立）[/dim]")
         elif app.wsrx.mode == "daemon" and mode == "repl":
             console.print(f"[dim]✓ wsrx 后台 daemon 已就绪（127.0.0.1:{app.wsrx.api_port}，{app.wsrx.source}）[/dim]")
+        if mode == "repl":
+            # 终端图片协议检测（REPL 接管终端前做一次，cat 图片/附件用）
+            app.graphics = detect_protocol()
         if mode == "script":
             return await _run_script(app, payload)
         return await run_repl(app)
@@ -116,6 +122,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if argv and argv[0] in ("-h", "--help"):
         console.print(USAGE)
+        return 0
+
+    if argv and argv[0] in ("-V", "--version"):
+        from ret2console import __version__
+        console.print(f"ret2console {__version__}（Ret2Shell 终端接口）")
         return 0
 
     if argv and argv[0] == "-c":

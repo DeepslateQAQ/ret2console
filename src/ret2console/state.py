@@ -45,6 +45,8 @@ class App:
     games_cache: dict[int, str] = field(default_factory=dict)
     challenges_cache: dict[int, dict[int, str]] = field(default_factory=dict)
     wsrx: Wsrx = field(default_factory=Wsrx)
+    # 终端图片协议（kitty / sixel / None），启动时检测一次
+    graphics: str | None = None
     _started: bool = False
 
     def __post_init__(self) -> None:

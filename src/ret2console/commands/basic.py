@@ -16,16 +16,23 @@ async def cmd_help(app: App, args: list[str]) -> int:
         if cmd is None:
             console.print(f"[red]✗ 未知命令: {args[0]}[/red]")
             return 1
-        console.print(f"[bold]{cmd.name}[/bold] [dim]{cmd.usage}[/dim]")
-        console.print(cmd.description)
+        print_cmd_help(cmd)
         return 0
     for category, cmds in commands_by_category().items():
         table = Table(title=category, show_header=False, box=None, padding=(0, 2))
         for cmd in sorted(cmds, key=lambda c: c.name):
             table.add_row(f"[bold]{cmd.name}[/bold]", f"[dim]{cmd.usage}[/dim]", cmd.description)
         console.print(table)
-    console.print("\n输入命令名 + --help 查看单个命令详情；tab 补全可用。")
+    console.print("\n输入命令名 + --help 查看单个命令详情，man <命令> 查看手册；tab 补全可用。")
     return 0
+
+
+def print_cmd_help(cmd: Command) -> None:
+    """单个命令帮助：名称 / 用法 / 说明 / 别名。"""
+    console.print(f"[bold]{cmd.name}[/bold] [dim]{cmd.usage}[/dim]")
+    console.print(cmd.description)
+    if cmd.aliases:
+        console.print(f"[dim]别名: {'/'.join(cmd.aliases)}[/dim]")
 
 
 async def cmd_exit(app: App, args: list[str]) -> int:
@@ -86,9 +93,9 @@ async def cmd_ls(app: App, args: list[str]) -> int:
 def _file_style(n) -> str | None:
     """特殊文件高亮：flag/instance 金色（对齐 flag 高亮），压缩包红色。"""
     if n.name in ("flag", "instance"):
-        return "bold ansiyellow"
+        return "bold bright_yellow"
     if n.name.endswith((".zip", ".tar", ".gz", ".7z", ".rar", ".xz")):
-        return "bold ansired"
+        return "bold bright_red"
     return None
 
 
@@ -99,8 +106,8 @@ def _render_short(nodes: list):
     files = [n for n in nodes if n.kind == "file"]
     parts: list[Text] = []
     for n in dirs:
-        t = Text(n.name, style="bold ansiblue")
-        t.append("/", style="bold ansiblue")
+        t = Text(n.name, style="bold bright_blue")
+        t.append("/", style="bold bright_blue")
         parts.append(t)
     for n in files:
         style = _file_style(n)
@@ -138,6 +145,12 @@ def _render_long(app: App, nodes: list) -> int:
     for n in nodes:
         kind = "d" if n.kind == "dir" else "f"
         name = n.name + ("/" if n.kind == "dir" else "")
+        if n.kind == "dir":
+            name = f"[bold bright_blue]{name}[/bold bright_blue]"
+            kind = "[bold bright_blue]d[/bold bright_blue]"
+        elif style := _file_style(n):
+            name = f"[{style}]{name}[/{style}]"
+            kind = f"[{style}]f[/{style}]"
         meta = ""
         if n.game_id is not None:
             title = app.games_cache.get(n.game_id)

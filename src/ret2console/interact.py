@@ -115,7 +115,7 @@ async def select(title: str, options: list[str]) -> int:
 
     @kb.add(Keys.Any)
     def _(event):
-        ch = event.key
+        ch = event.key_sequence[-1].key
         if len(ch) == 1 and ch.isprintable():
             state["filter"] += ch
             state["index"] = 0

@@ -6,7 +6,7 @@ from rich.table import Table
 
 from ret2console.api.client import ApiError
 from ret2console.commands import Command, register
-from ret2console.output import console, render_markdown
+from ret2console.output import console, format_ts, render_markdown
 from ret2console.state import App
 from ret2console.wsrx import (
     load_tunnels,
@@ -65,7 +65,7 @@ async def cmd_challenge_list(app: App, args: list[str]) -> int:
         table.add_row(
             str(cid),
             str(c.get("title") or c.get("name") or cid),
-            str(c.get("category") or ""),
+            _challenge_category(c),
             str(c.get("score") or c.get("value") or ""),
         )
     console.print(table)
@@ -118,7 +118,7 @@ async def cmd_challenge_instance(app: App, args: list[str]) -> int:
             console.print(f"tunnel: {tunnel_status(app.wsrx, str(inst['traffic']))}")
         if inst.get("ports"):
             console.print(f"ports: {', '.join(map(str, inst['ports']))}")
-        console.print(f"renew: {inst.get('renew_count', 0)}  created: {inst.get('created_at', '')}")
+        console.print(f"renew: {inst.get('renew_count', 0)}  created: {format_ts(inst.get('created_at', ''))}")
     return 0
 
 
@@ -346,3 +346,16 @@ async def _challenge_dispatch(app: App, args: list[str]) -> int:
         console.print(f"[red]✗ 未知 challenge 子命令: {sub}（可用: list/show/hint/unlock/start/instance/connect/disconnect/stop/renew）[/red]")
         return 1
     return await handler(app, args[1:])
+
+def _challenge_category(c: dict) -> str:
+    """r2s 的分类在 tag[] 里：取 primary 标签，否则取第一个标签。"""
+    tags = c.get("tag") or []
+    if not isinstance(tags, list):
+        return ""
+    for t in tags:
+        if isinstance(t, dict) and t.get("primary"):
+            return str(t.get("name") or "")
+    for t in tags:
+        if isinstance(t, dict) and t.get("name"):
+            return str(t["name"])
+    return ""

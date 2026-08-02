@@ -66,3 +66,24 @@ async def test_platform_name_none_on_network_error(monkeypatch):
     client = ApiClient(base_url="https://ctf.xidian.edu.cn/api")
     assert await client.platform_name() is None
 
+
+@pytest.mark.asyncio
+async def test_get_game_doc_decodes_json_string():
+    """后端返回 Json(content)：响应体是 JSON 编码字符串，需解码为真实文本（\n 转义还原）。"""
+    client = ApiClient(base_url="https://ctf.xidian.edu.cn/api")
+    client._client = httpx.AsyncClient(
+        base_url="https://ctf.xidian.edu.cn/api",
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json="# 比赛介绍\n\n欢迎参赛"))
+    )
+    assert await client.get_game_doc(3, "readme") == "# 比赛介绍\n\n欢迎参赛"
+
+
+@pytest.mark.asyncio
+async def test_get_game_doc_plain_text_fallback():
+    """非 JSON 响应（纯文本）时原样返回，不做解码。"""
+    client = ApiClient(base_url="https://ctf.xidian.edu.cn/api")
+    client._client = httpx.AsyncClient(
+        base_url="https://ctf.xidian.edu.cn/api",
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, text="# 纯文本"))
+    )
+    assert await client.get_game_doc(3, "readme") == "# 纯文本"
