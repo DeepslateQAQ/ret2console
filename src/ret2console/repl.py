@@ -206,7 +206,8 @@ def _command_table() -> dict[str, list[str]]:
 
 
 _SUBCOMMANDS: dict[str, list[str]] = {
-    "auth": ["login", "logout", "register", "status", "endpoint"],
+    "auth": ["login", "logout", "register", "status", "endpoint", "profile"],
+    "auth profile": ["list", "create", "use", "delete", "status"],
     "contest": ["list", "show", "use", "doc", "notice"],
     "challenge": ["list", "show", "hint", "unlock", "start", "instance", "connect", "disconnect", "stop", "renew"],
     "team": ["create", "join", "modify", "info", "rank", "member", "solve", "leave"],
@@ -225,22 +226,45 @@ def _subcommands(name: str) -> list[str]:
 
 
 def _dynamic_candidates(app: App):
-    """第三层补全：比赛/题目 id（缓存已由列表命令/fs 加载填充）。"""
+    """第三层补全：比赛/题目 id、profile 名（缓存已由列表命令/fs 加载填充）。"""
 
-    def candidates(cmd: str, word: str) -> list[tuple[str, str | None]]:
+    def candidates(cmd: str, before: list[str], word: str) -> list[tuple[str, str | None]]:
         if cmd == "contest" and word.lstrip("-").isdigit() is False:
             return [(str(gid), title) for gid, title in app.games_cache.items() if str(gid).startswith(word)]
         if cmd == "challenge":
             gid = app.ctx.game_id
             if gid is not None and gid in app.challenges_cache:
                 return [(str(cid), title) for cid, title in app.challenges_cache[gid].items() if str(cid).startswith(word)]
+        if (
+            cmd == "auth"
+            and len(before) >= 3
+            and before[1] == "profile"
+            and before[2] in ("use", "switch", "delete")
+        ):
+            from ret2console.config import DEFAULT_API_BASE, list_profiles, profile_config_path
+            import json
+            out: list[tuple[str, str | None]] = []
+            for name in list_profiles():
+                if not name.startswith(word):
+                    continue
+                ep = DEFAULT_API_BASE
+                try:
+                    data = json.loads(profile_config_path(name).read_text(encoding="utf-8"))
+                    ep = str(data.get("api_base") or DEFAULT_API_BASE)
+                except (OSError, json.JSONDecodeError):
+                    pass
+                out.append((name, ep))
+            return out
         return []
 
     return candidates
 
 
 async def _welcome(app: App) -> None:
-    """启动欢迎：已登录显示会话缓存并验证 token；过期则回到 guest。"""
+    """启动欢迎：已登录显示会话缓存并验证 token；过期则回到 guest。
+
+    验证通过后顺带检测已加入的进行中比赛，询问是否快速切换。
+    """
     if not app.session.logged_in:
         console.print("[dim]未登录（guest）— 输入 auth login 登录[/dim]")
         return
@@ -253,6 +277,11 @@ async def _welcome(app: App) -> None:
         if isinstance(perms, list):
             app.session.permissions = perms
         app.session.save()
+        from ret2console.contest_switch import offer_switch
+        try:
+            await offer_switch(app)
+        except Exception:
+            pass
     except ApiError as e:
         if e.status == 401:
             app.session.clear()

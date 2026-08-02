@@ -52,7 +52,8 @@ class App:
     def __post_init__(self) -> None:
         if not self._started:
             self._started = True
-            # 用已保存的会话初始化 API 客户端
+            # 按当前 profile 加载会话（凭证独立），并初始化 API 客户端
+            self.session = Session.load(self.config.active_profile)
             self.api.configure(
                 base_url=self.config.api_base, token=self.session.token,
                 insecure=self.config.insecure,
@@ -62,3 +63,20 @@ class App:
         self.session.token = token
         self.api.configure(base_url=self.config.api_base, token=token)
         self.session.save()
+
+    @property
+    def profile_name(self) -> str:
+        return self.config.active_profile
+
+    def switch_profile(self, name: str) -> None:
+        """切换到另一 profile：加载其 endpoint 与会话，清空上下文与缓存。"""
+        self.config.switch_profile(name)
+        self.session = Session.load(name)
+        self.api.configure(
+            base_url=self.config.api_base, token=self.session.token,
+            insecure=self.config.insecure,
+        )
+        self.api.reset_client()
+        self.ctx.set_path("/", None, None)
+        self.games_cache.clear()
+        self.challenges_cache.clear()

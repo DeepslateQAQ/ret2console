@@ -18,13 +18,13 @@ class Ret2ConsoleCompleter(Completer):
         vfs: Vfs | None = None,
         current_path: Callable[[], str] | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
-        dynamic_candidates: Callable[[str, str], list[str]] | None = None,
+        dynamic_candidates: Callable[[str, list[str], str], list[str]] | None = None,
     ) -> None:
         self._commands = commands
         self._vfs = vfs
         self._current_path = current_path or (lambda: "/")
         self._loop = loop
-        self._dynamic_candidates = dynamic_candidates or (lambda _a, _b: [])
+        self._dynamic_candidates = dynamic_candidates or (lambda _c, _b, _w: [])
 
     def get_completions(self, document: Document, complete_event) -> Iterable[Completion]:
         text = document.text_before_cursor
@@ -51,18 +51,22 @@ class Ret2ConsoleCompleter(Completer):
 
         # 后续词：子命令 + 动态 + 路径（支持两级命令：admin bulletin list）
         cmd = before[0]
-        key = cmd
-        if len(before) > 1:
+        # 静态子命令只来自与已输入词序列完全匹配的层级：
+        #   auth         → key=auth（补 login/profile/...）
+        #   auth profile → key=auth profile（补 list/create/...）
+        #   auth login   → 叶子命令，不再回退到 auth 的子命令（auth login 后无补全）
+        if len(before) == 1:
+            key = cmd
+        else:
             two = " ".join(before[:2])
-            if two in self._commands():
-                key = two
-        nested = key != cmd and len(before) >= 3  # 两级命令第三层起不再给静态子命令
+            key = two if two in self._commands() else None
+        nested = len(before) >= 3  # 三层起不再给静态子命令
         if not typing_new_word:
             if not nested:
                 for sub in self._commands().get(key, []):
                     if sub.startswith(word):
                         yield Completion(sub, start_position=-len(word))
-            for cand in self._dynamic_candidates(cmd, word):
+            for cand in self._dynamic_candidates(cmd, before, word):
                 text, meta = _split_candidate(cand)
                 yield Completion(text, start_position=-len(word), display_meta=meta)
             for text, meta in self._path_candidates(cmd, before, word):
@@ -73,7 +77,7 @@ class Ret2ConsoleCompleter(Completer):
             if not nested:
                 for sub in self._commands().get(key, []):
                     yield Completion(sub, start_position=0)
-            for cand in self._dynamic_candidates(cmd, ""):
+            for cand in self._dynamic_candidates(cmd, before, ""):
                 text, meta = _split_candidate(cand)
                 yield Completion(text, start_position=0, display_meta=meta)
             # 路径类命令：新参数视为从当前目录开始的新路径，不继承上一个词

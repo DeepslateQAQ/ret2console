@@ -14,6 +14,13 @@ $ uv run r2c
 
 您也可以使用其他平台，仅需使用命令 `auth endpoint https://your-ret2shell.domain/api` 即可。
 
+多 profile：每个 profile 独立保存凭证与 API endpoint，默认使用 `default`。
+`auth profile create work` 新建并切换，`auth profile use <名称>` 切换，
+`auth profile list` 查看全部，`auth profile delete <名称>` 删除（最后一个 profile 不可删，
+`default` 删除后下次 `use default` 会重新创建）。
+
+登录、启动或切换 profile 时会自动检测已加入队伍且在比赛时间内的赛事，并询问是否快速切换。
+
 具体使用方式可以参见 `help` 命令的内容。
 
 ---

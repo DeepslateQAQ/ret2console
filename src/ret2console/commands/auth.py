@@ -1,12 +1,25 @@
-"""认证命令：auth login / auth logout / auth register / auth status。"""
+"""认证命令：auth login / logout / register / status / endpoint / profile。"""
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+
+from rich.table import Table
 
 from ret2console.api.client import ApiError
 from ret2console.commands import Command, register
-from ret2console.config import DEFAULT_API_BASE
+from ret2console.config import (
+    DEFAULT_API_BASE,
+    DEFAULT_PROFILE,
+    list_profiles,
+    profile_config_path,
+    profile_dir,
+    profile_exists,
+    profile_session_path,
+    valid_profile_name,
+)
 from ret2console.interact import ask
 from ret2console.output import console
 from ret2console.state import App
@@ -44,6 +57,12 @@ async def cmd_auth_login(app: App, args: list[str]) -> int:
         app.session.permissions = []
     app.session.save()
     console.print(f"[bold green]✓[/bold green] 登录成功，欢迎 [bold]{app.session.display_name}[/bold]")
+    # 登录即检测：已加入且进行中的比赛 → 询问快速切换
+    from ret2console.contest_switch import offer_switch
+    try:
+        await offer_switch(app)
+    except Exception:
+        pass
     return 0
 
 
@@ -122,13 +141,118 @@ async def cmd_auth_endpoint(app: App, args: list[str]) -> int:
     return 0
 
 
+def _profile_login_state(name: str) -> str:
+    """profile 的登录态摘要（用于列表展示）。"""
+    path = profile_session_path(name)
+    if not path.exists():
+        return "[dim]未登录[/dim]"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("token"):
+            return f"{data.get('nickname') or data.get('account') or '已登录'}"
+        return "[dim]未登录[/dim]"
+    except (json.JSONDecodeError, OSError):
+        return "[dim]未登录[/dim]"
+
+
+async def cmd_auth_profile(app: App, args: list[str]) -> int:
+    """多 profile 管理：每个 profile 独立保存凭证与 API endpoint。"""
+    sub = args[0] if args else "list"
+    if sub in ("list", "ls"):
+        table = Table(box=None)
+        table.add_column("profile", style="bold")
+        table.add_column("endpoint")
+        table.add_column("登录", style="dim")
+        names = [app.profile_name] + [n for n in list_profiles() if n != app.profile_name]
+        for name in names:
+            ep = profile_config_path(name)
+            try:
+                data = json.loads(ep.read_text(encoding="utf-8"))
+                endpoint = data.get("api_base") or DEFAULT_API_BASE
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                endpoint = DEFAULT_API_BASE
+            marker = "* " if name == app.profile_name else "  "
+            table.add_row(f"{marker}{name}", endpoint, _profile_login_state(name))
+        console.print(table)
+        console.print("[dim]* 当前 profile；auth profile use <name> 切换，每个 profile 独立凭证与 endpoint[/dim]")
+        return 0
+    if sub in ("create", "new"):
+        if len(args) < 2:
+            console.print("[red]用法: auth profile create <名称>[/red]")
+            return 1
+        name = args[1]
+        if not valid_profile_name(name):
+            console.print("[red]✗ 无效的 profile 名称（字母/数字开头，仅含 [A-Za-z0-9._-]，≤32 字符）[/red]")
+            return 1
+        if profile_exists(name):
+            console.print(f"[yellow]! profile 「{name}」已存在[/yellow]")
+            return 1
+        profile_dir(name).mkdir(parents=True, exist_ok=True)
+        app.switch_profile(name)
+        console.print(f"[green]✓[/green] 已创建并切换到 profile [bold]{name}[/bold]（endpoint 为默认值，请 auth login）")
+        return 0
+    if sub in ("use", "switch"):
+        if len(args) < 2:
+            console.print("[red]用法: auth profile use <名称>[/red]")
+            return 1
+        name = args[1]
+        if not profile_exists(name):
+            console.print(f"[red]✗ profile 「{name}」不存在（auth profile create <名称>）[/red]")
+            return 1
+        if name == app.profile_name:
+            console.print(f"[dim]已在 profile 「{name}」[/dim]")
+            return 0
+        was_logged_in = app.session.logged_in
+        app.switch_profile(name)
+        if app.session.logged_in:
+            console.print(f"[green]✓[/green] 已切换到 profile [bold]{name}[/bold]，欢迎回来 [bold]{app.session.display_name}[/bold]")
+        else:
+            console.print(f"[green]✓[/green] 已切换到 profile [bold]{name}[/bold]（guest，auth login 登录）")
+        if was_logged_in or app.session.logged_in:
+            from ret2console.contest_switch import offer_switch
+            try:
+                await offer_switch(app)
+            except Exception:
+                pass
+        return 0
+    if sub == "delete":
+        if len(args) < 2:
+            console.print("[red]用法: auth profile delete <名称>[/red]")
+            return 1
+        name = args[1]
+        if not profile_exists(name):
+            console.print(f"[red]✗ profile 「{name}」不存在[/red]")
+            return 1
+        if name == app.profile_name:
+            console.print(f"[red]✗ 不能删除当前 profile，请先 auth profile use <其他>[/red]")
+            return 1
+        remaining = [n for n in list_profiles() if n != name]
+        if not remaining:
+            console.print("[red]✗ 至少需要保留一个 profile（请先 auth profile create <名称>）[/red]")
+            return 1
+        if profile_dir(name).exists():
+            shutil.rmtree(profile_dir(name))
+        console.print(f"[green]✓[/green] 已删除 profile [bold]{name}[/bold]")
+        return 0
+    if sub == "status":
+        console.print(f"当前 profile: [bold]{app.profile_name}[/bold]")
+        console.print(f"endpoint: {app.config.api_base}")
+        if app.session.logged_in:
+            console.print(f"登录: {app.session.display_name}")
+        else:
+            console.print("[dim]登录: 未登录（guest）[/dim]")
+        return 0
+    console.print(f"[red]✗ 未知 auth profile 子命令: {sub}（可用: list/create/use/delete/status）[/red]")
+    return 1
+
+
 def register_auth() -> None:
     from ret2console.commands import REGISTRY
     if "auth" in REGISTRY:
         return
     register(
         Command(
-            "auth", _auth_dispatch, usage="auth <login|logout|register|status|endpoint> ...",
+            "auth", _auth_dispatch, usage="auth <login|logout|register|status|endpoint|profile> ...",
             description="认证管理（PoW 验证码自动求解）", category="认证",
         )
     )
@@ -142,9 +266,10 @@ async def _auth_dispatch(app: App, args: list[str]) -> int:
         "register": cmd_auth_register,
         "status": cmd_auth_status,
         "endpoint": cmd_auth_endpoint,
+        "profile": cmd_auth_profile,
     }
     handler = table.get(sub)
     if handler is None:
-        console.print(f"[red]✗ 未知 auth 子命令: {sub}（可用: login/logout/register/status/endpoint）[/red]")
+        console.print(f"[red]✗ 未知 auth 子命令: {sub}（可用: login/logout/register/status/endpoint/profile）[/red]")
         return 1
     return await handler(app, args[1:])

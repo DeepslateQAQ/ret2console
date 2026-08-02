@@ -63,10 +63,12 @@ class Ret2ConsoleLexer(Lexer):
             return [(STYLE_COMMENT, text)]
         stripped = text.lstrip()
         lead = text[: len(text) - len(stripped)]
-        # 按空白分词，保持每个 token 的原始边界
-        tokens: list[tuple[int, int]] = []
+        out: StyleAndTextTuples = []
+        if lead:
+            out.append(("", lead))
         i = 0
         n = len(stripped)
+        idx = 0
         while i < n:
             while i < n and stripped[i].isspace():
                 i += 1
@@ -74,23 +76,24 @@ class Ret2ConsoleLexer(Lexer):
             while i < n and not stripped[i].isspace():
                 i += 1
             if start < i:
-                tokens.append((start, i))
-        out: StyleAndTextTuples = []
-        if lead:
-            out.append(("", lead))
-        for idx, (s, e) in enumerate(tokens):
-            token = stripped[s:e]
-            if idx == 0:
-                style = STYLE_COMMAND if self._is_command(token) else STYLE_UNKNOWN
-            elif token.startswith("/") or self._is_path(token):
-                style = STYLE_PATH
-            elif token.startswith(("'", '"')) or token.startswith("$'"):
-                style = STYLE_QUOTE
-            elif any(ch in token for ch in "*?[]"):
-                style = STYLE_GLOB
-            else:
-                style = STYLE_DEFAULT
-            out.append((style, stripped[s:e]))
-            if idx < len(tokens) - 1:
-                out.append(("", stripped[e : tokens[idx + 1][0]]))
+                token = stripped[start:i]
+                if idx == 0:
+                    style = STYLE_COMMAND if self._is_command(token) else STYLE_UNKNOWN
+                elif token.startswith("/") or self._is_path(token):
+                    style = STYLE_PATH
+                elif token.startswith(("'", '"')) or token.startswith("$'"):
+                    style = STYLE_QUOTE
+                elif any(ch in token for ch in "*?[]"):
+                    style = STYLE_GLOB
+                else:
+                    style = STYLE_DEFAULT
+                out.append((style, token))
+                idx += 1
+            # 保留 token 间的空白（含末尾空白）：fragments 长度必须与文档一致，
+            # 否则 prompt_toolkit 的行内坐标映射缺失，Tab 补全菜单会锚到行头。
+            ws_start = i
+            while i < n and stripped[i].isspace():
+                i += 1
+            if i > ws_start:
+                out.append(("", stripped[ws_start:i]))
         return out

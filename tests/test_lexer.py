@@ -1,4 +1,5 @@
 from prompt_toolkit.document import Document
+from prompt_toolkit.formatted_text.utils import fragment_list_to_text
 
 from ret2console.lexer import (
     Ret2ConsoleLexer,
@@ -71,3 +72,19 @@ def test_splash_art_three_lines_aligned():
     assert len(lines) == 3
     assert len({len(l) for l in lines}) == 1  # 三行等宽（列对齐，供按位置着色）
     assert len(lines[0]) == 33
+
+
+def test_fragments_preserve_whitespace_and_length():
+    """lexer 必须保留所有空白（含末尾），保证 fragments 长度与文档一致，
+    否则 Tab 补全菜单在尾随空格场景会锚定到行头。"""
+    for text in ["auth ", "auth profile ", "cd ", "  ls  -la  ", "ls /tmp "]:
+        tokens = _tokens(text, lambda w: w in ("auth", "cd", "ls"))
+        assert fragment_list_to_text(tokens) == text
+        total = sum(len(t) for _, t in tokens)
+        assert total == len(text)
+
+
+def test_flag_line_keeps_trailing_space():
+    tokens = _tokens("flag{abc123} ", lambda w: False)
+    assert any(s == STYLE_FLAG for s, _ in tokens)
+    assert fragment_list_to_text(tokens) == "flag{abc123} "

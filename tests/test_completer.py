@@ -111,11 +111,66 @@ def test_complete_dynamic_candidate_meta():
     comp = Ret2ConsoleCompleter(
         commands=lambda: {"contest": []},
         vfs=vfs,
-        dynamic_candidates=lambda _c, _w: [("3", "测试比赛"), ("7", "新生赛")],
+        dynamic_candidates=lambda _c, _b, _w: [("3", "测试比赛"), ("7", "新生赛")],
     )
     by_text = {c.text: c for c in comp.get_completions(Document("contest "), None)}
     assert _meta(by_text["3"]) == "测试比赛"
     assert _meta(by_text["7"]) == "新生赛"
+
+
+def test_profile_subcommand_completion():
+    """auth profile 空格后 Tab：补全 profile 子命令，而不是 auth 的 login/logout。"""
+    from ret2console.repl import _command_table
+    table = _command_table()
+    assert table["auth profile"] == ["list", "create", "use", "delete", "status"]
+    comp = Ret2ConsoleCompleter(
+        commands=lambda: table,
+        vfs=_build_vfs(),
+        dynamic_candidates=lambda _c, _b, _w: [],
+    )
+    results = list(comp.get_completions(Document("auth profile "), None))
+    texts = [c.text for c in results]
+    assert "list" in texts and "create" in texts and "use" in texts
+    assert "delete" in texts and "status" in texts
+    assert "login" not in texts and "logout" not in texts
+    assert all(c.start_position == 0 for c in results)
+    # 前缀匹配：auth profile u → use
+    results = list(comp.get_completions(Document("auth profile u"), None))
+    assert [c.text for c in results] == ["use"]
+
+
+def test_profile_name_completion():
+    """auth profile use/delete 空格后 Tab：补全已有 profile 名（带 endpoint 描述）。"""
+    from ret2console.config import profile_config_path
+    from ret2console.repl import _command_table
+    from pathlib import Path
+    profile_config_path("default").parent.mkdir(parents=True, exist_ok=True)
+    (profile_config_path("default")).write_text(
+        '{"api_base": "https://ctf.xidian.edu.cn/api", "insecure": false}', encoding="utf-8"
+    )
+    profile_config_path("dev").parent.mkdir(parents=True, exist_ok=True)
+    (profile_config_path("dev")).write_text(
+        '{"api_base": "https://ret2shell.home.undef.work:8443/api", "insecure": true}',
+        encoding="utf-8",
+    )
+    comp = Ret2ConsoleCompleter(
+        commands=lambda: _command_table(),
+        vfs=_build_vfs(),
+        dynamic_candidates=lambda _c, _b, _w: [],
+    )
+    # 用真实 repl 的 dynamic 回调（模拟 run_repl 的接线）
+    from ret2console.repl import _dynamic_candidates
+    from ret2console.state import App
+    app = App()
+    comp._dynamic_candidates = _dynamic_candidates(app)
+    results = list(comp.get_completions(Document("auth profile use "), None))
+    by_text = {c.text: c for c in results}
+    assert set(by_text) >= {"default", "dev"}
+    assert _meta(by_text["dev"]) == "https://ret2shell.home.undef.work:8443/api"
+    assert all(c.start_position == 0 for c in results)
+    # 前缀匹配：auth profile delete dev → dev（de 同时是 default/dev 的前缀）
+    results = list(comp.get_completions(Document("auth profile delete dev"), None))
+    assert [c.text for c in results] == ["dev"]
 
 
 def test_complete_after_space_yields_subcommands():
@@ -131,6 +186,46 @@ def test_complete_after_space_yields_subcommands():
     assert "auth" not in texts, "不应再把 auth 当命令名补全（会造成 aauth）"
     assert "contests/" not in texts, "非路径命令的空格后不应混入 fs 候选"
     assert all(c.start_position == 0 for c in results)
+
+
+def test_leaf_command_space_yields_nothing():
+    """叶子命令（auth login / challenge start / team create）空格后 Tab：
+    不应回退弹父级子命令菜单。"""
+    from ret2console.repl import _command_table
+    comp = Ret2ConsoleCompleter(
+        commands=lambda: _command_table(),
+        vfs=_build_vfs(),
+        dynamic_candidates=lambda _c, _b, _w: [],
+    )
+    for line in ["auth login ", "auth endpoint ", "challenge start ", "team create ", "admin bulletin create "]:
+        results = list(comp.get_completions(Document(line), None))
+        assert results == [], f"{line!r} 不应有任何补全，实际: {[c.text for c in results]}"
+
+
+def test_leaf_command_typing_word_yields_nothing():
+    """叶子命令后的自由参数（auth login u / challenge start 1）不弹任何菜单。"""
+    from ret2console.repl import _command_table
+    comp = Ret2ConsoleCompleter(
+        commands=lambda: _command_table(),
+        vfs=_build_vfs(),
+        dynamic_candidates=lambda _c, _b, _w: [],
+    )
+    for line in ["auth login u", "auth endpoint set", "challenge start 1"]:
+        results = list(comp.get_completions(Document(line), None))
+        assert results == [], f"{line!r} 不应有任何补全，实际: {[c.text for c in results]}"
+
+
+def test_two_level_command_still_completes():
+    """两级命令（auth profile / admin bulletin）仍是子命令位置，补全不受影响。"""
+    from ret2console.repl import _command_table
+    comp = Ret2ConsoleCompleter(
+        commands=lambda: _command_table(),
+        vfs=_build_vfs(),
+        dynamic_candidates=lambda _c, _b, _w: [],
+    )
+    assert "list" in [c.text for c in comp.get_completions(Document("auth profile "), None)]
+    assert "create" in [c.text for c in comp.get_completions(Document("admin bulletin "), None)]
+    assert "login" not in [c.text for c in comp.get_completions(Document("auth profile "), None)]
 
 
 def test_complete_after_path_with_space_uses_cwd():

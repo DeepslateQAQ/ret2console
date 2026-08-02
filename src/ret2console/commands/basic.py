@@ -228,6 +228,7 @@ async def cmd_status(app: App, args: list[str]) -> int:
         parts.append(f"当前题目: [bold]{ctx.challenge_id}[/bold]")
     console.print("  ".join(parts))
     console.print(f"API: {app.config.api_base}")
+    console.print(f"profile: {app.profile_name}")
     return 0
 
 

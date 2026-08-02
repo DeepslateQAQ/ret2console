@@ -14,6 +14,7 @@ _SUB_HELP: dict[str, str] = {
     "auth register": "注册新账号",
     "auth status": "查看登录状态",
     "auth endpoint": "查看或切换 API 平台地址（reset 恢复默认）",
+    "auth profile": "多 profile 管理（list/create/use/delete，凭证与 endpoint 独立）",
     "contest list": "列出比赛",
     "contest show": "显示比赛详情",
     "contest use": "切换当前比赛上下文",
