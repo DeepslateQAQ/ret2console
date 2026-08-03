@@ -23,6 +23,8 @@ from ret2console.wsrx import (
 )
 
 AGENTS = ("codex", "claude", "opencode", "omp", "reasonix", "kimi")
+# 不支持 TUI 初始消息的 Agent：打印提示词供选手复制粘贴，确认后裸启动
+NO_INITIAL_PROMPT_AGENTS = ("kimi", "reasonix")
 WARNING = "警告：使用一把梭功能可能导致您的亲人遭受损失（物理），是否仍要继续？"
 INSTANCE_WAIT = 12.0  # 实例构建轮询上限（秒）
 
@@ -164,14 +166,15 @@ async def _build_taskbook(app: App, gid: int, cid: int, workdir: Path, agent: st
 
 
 def _launch_args(agent: str, prompt: str) -> list[str]:
-    """Agent 启动方式：codex/claude/opencode 支持直接传初始消息；
-    kimi 按位置参数传（第三方资料）；omp/reasonix 暂不支持 TUI 初始消息，裸启动。"""
-    if agent in ("codex", "claude"):
+    """Agent 启动方式：codex/claude/omp 支持直接传初始消息（`omp "<prompt>"` 进带初始消息的 TUI）；
+    opencode 用 --prompt；kimi（Kimi Code）与 reasonix 不支持 TUI 初始消息，
+    由 cmd_autoplay 先提示选手复制提示词，确认后裸启动（reasonix 入口为 `reasonix code`）。"""
+    if agent in ("codex", "claude", "omp"):
         return [agent, prompt]
     if agent == "opencode":
         return [agent, "--prompt", prompt]
-    if agent == "kimi":
-        return [agent, prompt]
+    if agent == "reasonix":
+        return [agent, "code"]
     return [agent]
 
 
@@ -220,6 +223,17 @@ async def cmd_autoplay(app: App, args: list[str]) -> int:
         _append_conn(taskbook, conn, app.config.api_base)
     prompt = taskbook.read_text(encoding="utf-8")
     console.print(f"[green]✓[/green] 任务书已生成: {taskbook}")
+    if agent in NO_INITIAL_PROMPT_AGENTS:
+        # kimi / reasonix 不支持 TUI 初始消息：打印提示词供复制，确认后启动
+        console.print(f"[yellow]! {agent} 不支持 TUI 初始消息：请复制下方提示词，启动后粘贴到首条消息[/yellow]")
+        console.print(prompt, markup=False)
+        try:
+            ok = await confirm("确认已复制提示词，启动该 Agent？")
+        except KeyboardInterrupt:
+            console.print("\n已取消")
+            return 1
+        if not ok:
+            return 1
     console.print(f"[dim]正在启动 {agent}（退出后返回 ret2console）[/dim]")
     proc = await asyncio.create_subprocess_exec(*_launch_args(agent, prompt))
     await proc.wait()

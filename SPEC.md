@@ -180,13 +180,16 @@ REPL 内输入 `zsh` / `bash` / `fish`（检测本机已安装）交互式启动
 1. 检测可用 Agent（`shutil.which`）：`codex` / `claude` / `opencode` / `omp` / `reasonix` / `kimi`，多个时弹出 gh 风格交互式选择器（↑↓ 高亮 + Enter，prompt_toolkit 实现，支持数字快捷）
 2. 确认提示：「警告：使用一把梭功能可能导致您的亲人遭受损失（物理），是否仍要继续？[y/N]」（文案原样保留）
 3. 自动下载当前题目附件到 `~/.ret2console/autoplay/<题目id>/`，生成「任务书」markdown（题面全文 + 附件绝对路径 + 目标说明）
-4. 用参数把提示词传进去**直接启动 Agent 的标准 TUI**（继承终端），选手继续操作；不回收 flag，选手退出后自行粘贴提交
+4. 用参数把提示词传进去**直接启动 Agent 的标准 TUI**（继承终端），选手继续操作；不回收 flag，选手退出后自行粘贴提交。
+   不支持 TUI 初始消息的 Agent（kimi / reasonix）：先打印提示词，选手自行复制、启动后粘贴到首条消息，确认后启动
 
 Agent 启动方式（实测/待实测）：
 - `codex` → `codex "<prompt>"`（无子命令 + PROMPT 参数直接进交互式 TUI 并带初始消息 ✓ 已实测）
 - `claude` → `claude "<prompt>"`（交互式，首条消息）
-- `opencode` → `opencode` 交互式 TUI，初始消息能力待实测，兜底打印任务书路径
-- `omp` / `reasonix` / `kimi` → 检测即列出，初始消息未知，兜底打印任务书路径
+- `opencode` → `opencode --prompt "<prompt>"`（交互式 TUI 带初始消息）
+- `omp` → `omp "<prompt>"`（直接进交互式 TUI 并带初始消息，omp 文档确认）
+- `kimi` → Kimi Code CLI：`kimi` 进交互式 TUI（`-p` 为单次非交互）；**不支持 TUI 初始消息** → 打印提示词供复制，确认后启动
+- `reasonix` → `reasonix code` 进 code 模式 TUI；**不支持 TUI 初始消息** → 打印提示词供复制，确认后启动
 - 执行方式以各家 `--help` 实测为准，任务书兜底永远在
 
 ## 13. wsrx（WebSocketReflectorX）检测与隧道

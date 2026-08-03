@@ -52,8 +52,9 @@ def test_launch_args():
     assert _launch_args("codex", "p") == ["codex", "p"]
     assert _launch_args("claude", "p") == ["claude", "p"]
     assert _launch_args("opencode", "p") == ["opencode", "--prompt", "p"]
-    assert _launch_args("kimi", "p") == ["kimi", "p"]
-    assert _launch_args("omp", "p") == ["omp"]
+    assert _launch_args("kimi", "p") == ["kimi"]
+    assert _launch_args("omp", "p") == ["omp", "p"]
+    assert _launch_args("reasonix", "p") == ["reasonix", "code"]
 
 
 @pytest.mark.asyncio
@@ -110,6 +111,38 @@ async def test_autoplay_builds_taskbook_and_launches(tmp_path, monkeypatch):
     assert "签到" in text and "输出 hello" in text
     assert (workdir / "a.zip").is_file()
     assert "a.zip" in text
+
+
+@pytest.mark.asyncio
+async def test_autoplay_kimi_copies_prompt_then_launches(tmp_path, monkeypatch):
+    """kimi 不支持 TUI 初始消息：打印提示词、确认后裸启动。"""
+    launched = {}
+    confirms = []
+
+    class FakeProc:
+        pid = 1234
+        async def wait(self):
+            return 0
+
+    async def fake_exec(*args, env=None, **kw):
+        launched["args"] = args
+        return FakeProc()
+
+    async def fake_confirm(q, **kw):
+        confirms.append(q)
+        return True
+
+    monkeypatch.setattr(autoplay_mod.shutil, "which", lambda a: f"/usr/bin/{a}" if a == "kimi" else None)
+    monkeypatch.setattr(autoplay_mod, "confirm", fake_confirm)
+    monkeypatch.setattr(autoplay_mod.asyncio, "create_subprocess_exec", fake_exec)
+    app = _app(AutoBackend())
+    app.config.autoplay_dir = str(tmp_path / "autoplay")
+    app.ctx.set_challenge(3, 5)
+    assert await dispatch(app, "autoplay") == 0
+    assert launched["args"] == ("kimi",)
+    # 两次确认：危险警告 + 复制提示词确认
+    assert len(confirms) == 2
+    assert "复制" in confirms[1]
 
 
 @pytest.fixture
