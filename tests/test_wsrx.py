@@ -4,6 +4,7 @@ import json
 import signal
 import tarfile
 import io
+import zipfile
 
 import pytest
 
@@ -146,9 +147,65 @@ def test_download_binary(monkeypatch, tmp_path):
         def __exit__(self, *a): return None
 
     monkeypatch.setattr(wsrx_mod.httpx, "Client", FakeClient)
-    assert download_binary() is True
-    assert binary.is_file() and binary.stat().st_mode & 0o111
+    assert download_binary()
+    assert binary.is_file()
     assert "fake-wsrx" in binary.read_text()
+
+
+def _zip_blob(name: str = "wsrx.exe") -> bytes:
+    import io as _io
+    buf = _io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(f"target/release/{name}", b"fake-wsrx-win")
+    return buf.getvalue()
+
+
+def test_asset_name_windows(monkeypatch):
+    """Windows 平台资产名：windows-msvc-x86_64.zip（x86_64）。"""
+    monkeypatch.setattr(wsrx_mod.sys, "platform", "win32")
+    monkeypatch.setattr(wsrx_mod.platform, "machine", lambda: "AMD64")
+    assert wsrx_mod._asset_name("0.5.17") == "wsrx-cli-0.5.17-windows-msvc-x86_64.zip"
+    monkeypatch.setattr(wsrx_mod.platform, "machine", lambda: "arm64")
+    assert wsrx_mod._asset_name("0.5.17") is None
+
+
+def test_asset_name_macos(monkeypatch):
+    monkeypatch.setattr(wsrx_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(wsrx_mod.platform, "machine", lambda: "arm64")
+    assert wsrx_mod._asset_name("0.5.17") == "wsrx-cli-0.5.17-macos-aarch64.zip"
+
+
+def test_extract_binary_windows_zip():
+    """Windows zip 内为 target/release/wsrx.exe，应提取成功。"""
+    blob = _zip_blob("wsrx.exe")
+    out = wsrx_mod._extract_binary(blob, "wsrx-cli-0.5.17-windows-msvc-x86_64.zip")
+    assert out == b"fake-wsrx-win"
+
+
+def test_extract_binary_macos_zip():
+    """macOS zip 内为 target/<triple>/release/wsrx（无 .exe）。"""
+    blob = _zip_blob("wsrx")
+    out = wsrx_mod._extract_binary(blob, "wsrx-cli-0.5.17-macos-x86_64.zip")
+    assert out == b"fake-wsrx-win"
+
+
+def test_binary_path_windows(monkeypatch):
+    """Windows 下 BINARY 带 .exe 后缀（结束后恢复平台并重新加载，避免模块残留 win32 状态）。
+
+    注意：真实 Windows 上 orig_platform 即 win32，恢复后 BINARY 仍是 wsrx.exe。
+    """
+    import importlib
+    orig_platform = wsrx_mod.sys.platform
+    try:
+        monkeypatch.setattr(wsrx_mod.sys, "platform", "win32")
+        importlib.reload(wsrx_mod)
+        assert wsrx_mod.BINARY.name == "wsrx.exe"
+    finally:
+        wsrx_mod.sys.platform = orig_platform
+        importlib.reload(wsrx_mod)
+        # 恢复后与平台默认一致：win32 → wsrx.exe；其它 → wsrx
+        expected = "wsrx.exe" if orig_platform == "win32" else "wsrx"
+        assert wsrx_mod.BINARY.name == expected
 
 
 def test_ensure_starts_daemon_when_missing(monkeypatch, tmp_path):

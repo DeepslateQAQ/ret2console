@@ -93,28 +93,48 @@ $ uv sync
 
 ### 构建
 
-若需要构建出单二进制文件分发版本，可使用 Nuitka 进行构建，命令如下：
+> [!WARNING]
+>
+> 我们的构建脚本未提供自动设置依赖功能，请在构建前运行以下命令设置依赖：
+>
+> **Linux / Darwin**（需 `python3.12+` 开发头文件、`uv` 或 `pip`、`patchelf`、`gcc`/`clang`）：
+>
+> ```bash
+> # Ubuntu / Debian
+> $ sudo apt install python3-dev patchelf gcc
+> # Fedora
+> $ sudo dnf install python3-devel patchelf gcc
+> # Arch
+> $ sudo pacman -S python patchelf gcc
+> # macOS
+> $ brew install python patchelf
+> # 项目依赖（uv 或 pip 任选其一）
+> $ uv sync --all-groups
+> # 或：pip install -e . nuitka zstandard
+> ```
+>
+> **Windows**（需 Windows 版 Python 3.12 + `uv`）：
+>
+> ```powershell
+> $ uv sync --all-groups
+> ```
 
-```bash
-$ uv run --group build nuitka \
-    --onefile --assume-yes-for-downloads \
-    --no-deployment-flag=self-execution \
-    --output-filename=dist/ret2console \
-    --remove-output --jobs="$(nproc)" \
-    src/ret2console/cli.py
-```
+对于不同的目标平台，您可以在特定的构建环境使用命令进行构建（Nuitka onefile 单文件产物）：
 
-构建出的产物位于 `dist/ret2console` 内。
+ - Windows: `powershell -ExecutionPolicy Bypass -File scripts/build.ps1`（或 `scripts\build.bat`）→ `build/win/ret2console.exe`
+ - Linux / macOS: `scripts/build.sh` → `build/linux/ret2console` / `build/macos/ret2console`
 
-建议的构建环境为 Ubuntu 22.04，其 glibc 版本为 2.35，支持大部分 glibc 版本高于 2.34 的发行版。
-
-您也可以使用容器在可控环境内进行构建：
+此外，Linux 构建也可以使用 Docker 进行构建：
 
 ```bash
 $ ./scripts/build-in-container.sh
 ```
 
+这将自动以 Ubuntu 22.04 (glibc 2.35) 创建 `r2c-builder` 容器并在其中完成构建，并将构建产物导出到 `dist/ret2console`。
+
 如需重建容器环境（例如换构建基线镜像后）可加 `--cleanup` 参数。
+
+CI（GitHub Actions）会在推送 / 手动触发时并行构建五个目标（linux-amd64 / linux-arm64 / windows-amd64 / darwin-amd64 / darwin-arm64），产物以 `ret2console-nuitka-<target>` 命名上传为 artifact。
 
 ## 相关项目
 

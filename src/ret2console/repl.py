@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sys
 
 from pathlib import Path
 
@@ -55,7 +56,7 @@ def is_valid_command(word: str) -> bool:
     """命令是否有效（用于高亮）：注册表命令；shell 额外要求本机已安装。"""
     if get_command(word) is None:
         return False
-    if word in shells.SHELLS:
+    if word in shells.shell_names():
         return shells.installed(word) is not None
     return True
 
@@ -170,6 +171,11 @@ async def run_repl(app: App, history_path: str | None = None) -> int:
         complete_in_thread=False,
     )
     print_splash()
+    if sys.platform == "win32":
+        console.print(
+            "[yellow]! 不建议在 Windows 环境打 CTF：部分工具/脚本面向 *nix，\n"
+            "  建议使用 WSL（wsl --install）运行 ret2console。[/yellow]"
+        )
     await _welcome(app)
     while True:
         try:

@@ -7,15 +7,21 @@ import io
 import math
 import os
 import re
-import select
 import shutil
 import subprocess
 import sys
-import termios
 import time
-import tty
 from collections import Counter
 from urllib.parse import urljoin
+
+try:
+    import select
+    import termios
+    import tty
+except ImportError:  # Windows：无 termios/tty/select（select 仅 Unix）
+    select = None
+    termios = None
+    tty = None
 
 from ret2console.output import is_tty
 
@@ -28,7 +34,12 @@ _IMG_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
 
 def _query_terminal(payload: bytes, timeout: float = 0.15) -> bytes | None:
-    """向终端发送查询序列并读取响应（临时 raw 模式，结束后恢复）。"""
+    """向终端发送查询序列并读取响应（临时 raw 模式，结束后恢复）。
+
+    Windows 无 termios/tty：无法 raw 查询，直接视为不支持。
+    """
+    if termios is None or tty is None or select is None:
+        return None
     try:
         fd_in = sys.stdin.fileno()
         fd_out = sys.stdout.fileno()

@@ -11,6 +11,7 @@ import asyncio
 import os
 import re
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -22,28 +23,61 @@ from ret2console.state import App
 # 字面花括号用字符类 `[{]` / `[}]` 表示，bash/fish 同样兼容。
 _FLAG_RE = r"^[A-Za-z0-9_]+[{][^{}]+[}]$"
 
-# 提交通道：stdin 喂 flag
-_SUBMIT_CMD = "ret2console -c 'submit -'"
+# 提交通道：stdin 喂 flag（占位符，launch_shell 时替换为实际可执行路径）
+# 实际执行路径动态注入：onefile 用 sys.argv[0]；源码运行用 sys.executable。
+# 不能硬编码 ret2console——用户可能未将 r2c 放入 PATH。
+_SUBMIT_CMD = "__R2C_BIN__ -c 'submit -'"
+_SUBMIT_PLACEHOLDER = "__R2C_BIN__"
 
-SHELLS = ("bash", "zsh", "fish")
+# Windows shell 无 rc 注入机制（见 launch_shell），仅原生启动，不支持 flag 自动提交
+WINDOWS_SHELLS = ("cmd", "pwsh", "powershell")
+UNIX_SHELLS = ("bash", "zsh", "fish")
+
+
+def shell_names() -> tuple[str, ...]:
+    """当前平台可用的 shell 命令列表：Windows 下隐藏 bash/zsh/fish，换为 cmd/pwsh/powershell。"""
+    return WINDOWS_SHELLS if sys.platform == "win32" else UNIX_SHELLS
+
+
+def is_windows_shell(name: str) -> bool:
+    return name in WINDOWS_SHELLS
 
 
 def installed(name: str) -> str | None:
+    if name in WINDOWS_SHELLS:
+        if sys.platform != "win32":
+            return None
+        if name == "cmd":
+            return "cmd.exe"  # Windows 系统组件，必然存在
+        if name == "powershell":
+            # Windows PowerShell 5.1：system32 系统组件，必然存在
+            return "powershell.exe"
+        return shutil.which(name)  # pwsh 需额外安装（PATH 或标准位置）
     return shutil.which(name)
 
 
-def _bash_rc() -> str:
+def _shell_rc(name: str, submit_cmd: str) -> str:
+    """生成注入 rc 内容（bash/zsh/fish 共用），提交通道为实际可执行路径。"""
+    if name == "bash":
+        return _bash_rc(submit_cmd)
+    if name == "zsh":
+        return _zsh_rc(submit_cmd)
+    return _fish_conf(submit_cmd)
+
+
+def _bash_rc(submit_cmd: str = "") -> str:
+    cmd = submit_cmd or _SUBMIT_CMD
     return f'''# ret2console 注入（bash）
 submit() {{
     if [ $# -ge 1 ]; then
-        printf '%s' "$1" | {_SUBMIT_CMD}
+        printf '%s' "$1" | {cmd}
     else
         printf '用法: submit <flag>\\n'
     fi
 }}
 __r2c_submit_check() {{
     if [[ "$BASH_COMMAND" =~ {_FLAG_RE} ]]; then
-        printf '%s' "$BASH_COMMAND" | {_SUBMIT_CMD}
+        printf '%s' "$BASH_COMMAND" | {cmd}
     fi
 }}
 trap __r2c_submit_check DEBUG
@@ -73,11 +107,12 @@ command_not_found_handle() {{
 '''
 
 
-def _zsh_rc() -> str:
+def _zsh_rc(submit_cmd: str = "") -> str:
+    cmd = submit_cmd or _SUBMIT_CMD
     return f'''# ret2console 注入（zsh）
 submit() {{
     if [ $# -ge 1 ]; then
-        print -rn -- "$1" | {_SUBMIT_CMD}
+        print -rn -- "$1" | {cmd}
     else
         print '用法: submit <flag>'
     fi
@@ -86,7 +121,7 @@ autoload -Uz add-zsh-hook
 __r2c_preexec() {{
     emulate -L zsh
     if [[ "$1" =~ {_FLAG_RE} ]]; then
-        print -rn -- "$1" | {_SUBMIT_CMD}
+        print -rn -- "$1" | {cmd}
     fi
 }}
 add-zsh-hook preexec __r2c_preexec
@@ -119,11 +154,12 @@ command_not_found_handler() {{
 '''
 
 
-def _fish_conf() -> str:
+def _fish_conf(submit_cmd: str = "") -> str:
+    cmd = submit_cmd or _SUBMIT_CMD
     return f'''# ret2console 注入（fish）
 function submit
     if test (count $argv) -ge 1
-        printf '%s' $argv[1] | {_SUBMIT_CMD}
+        printf '%s' $argv[1] | {cmd}
     else
         echo '用法: submit <flag>'
     end
@@ -131,7 +167,7 @@ end
 function __r2c_preexec --on-event fish_preexec
     set -l cmdline (commandline)
     if string match -qr '{_FLAG_RE}' -- "$cmdline"
-        printf '%s' "$cmdline" | {_SUBMIT_CMD}
+        printf '%s' "$cmdline" | {cmd}
     end
 end
 
@@ -168,6 +204,55 @@ end
 '''
 
 
+def _ps_quote(path: str) -> str:
+    """PowerShell 单引号字符串：包裹并转义内嵌单引号（''）。"""
+    return "'" + path.replace("'", "''") + "'"
+
+
+def _ps_profile(submit_cmd: str = "") -> str:
+    """pwsh / powershell 注入脚本（PSReadLine Enter 钩子，等价 preexec）。
+
+    PowerShell 无 command-not-found 钩子，但 PSReadLine 支持绑定 Enter 键
+    在命令执行前拦截整行：命中 flag 格式则自动提交并丢弃该行。
+    pwsh（7+）与 powershell（5.1）均内置 PSReadLine，同一脚本可用；
+    两者 profile 路径不同，由 $PROFILE 自动区分（-NoProfile 启动后手动 source）。
+    """
+    cmd = submit_cmd or _SUBMIT_CMD
+    return f'''# ret2console 注入（pwsh / powershell）
+function submit {{
+    param([string]$Flag)
+    if ($Flag) {{
+        $Flag | & {cmd}
+    }} else {{
+        Write-Host '用法: submit <flag>'
+    }}
+}}
+$r2cHook = {{
+    $r2cLine = $null
+    $r2cCursor = $null
+    [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$r2cLine, [ref]$r2cCursor)
+    $r2cLine = $r2cLine.Trim()
+    if ($r2cLine -match '{_FLAG_RE}') {{
+        $r2cLine | & {cmd}
+        [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
+    }} else {{
+        [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
+    }}
+}}
+if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {{
+    Set-PSReadLineKeyHandler -Key Enter -ScriptBlock $r2cHook
+    # 注入在前，source 用户自己的 profile（-NoProfile 启动后手动恢复），随后重装钩子防覆盖
+    foreach ($r2cP in @($PROFILE.AllUsersAllHosts, $PROFILE.AllUsersCurrentHost, $PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost)) {{
+        if (Test-Path -LiteralPath $r2cP) {{ . $r2cP }}
+    }}
+    Set-PSReadLineKeyHandler -Key Enter -ScriptBlock $r2cHook
+    Write-Host '已注入 flag 自动提交 handler'
+}} else {{
+    Write-Host '! 未检测到 PSReadLine：flag 自动提交不可用，请将 flag 复制回 ret2console 粘贴提交' -ForegroundColor Yellow
+}}
+'''
+
+
 def _launch_env(name: str, tmpdir: Path, game_id: int | None, challenge_id: int | None) -> dict[str, str]:
     """注入 shell 的环境：把当前题目上下文带给 `ret2console -c 'submit -'` 新进程。
 
@@ -188,8 +273,9 @@ def _launch_env(name: str, tmpdir: Path, game_id: int | None, challenge_id: int 
         pass  # 交互式用 --rcfile 注入
     elif name == "zsh":
         env["ZDOTDIR"] = str(tmpdir)
-    else:  # fish
+    elif name == "fish":
         env["XDG_CONFIG_HOME"] = str(tmpdir / "xconfig")
+    # cmd / pwsh / powershell：无 rc/配置目录注入，不改环境
     return env
 
 
@@ -198,21 +284,69 @@ async def launch_shell(app: App, name: str, binary: str | None = None) -> int:
     if binary is None:
         console.print(f"[red]✗ {name}: 未检测到本机安装[/red]")
         return 127
+    # 实际可执行文件：onefile 用 sys.argv[0]（打包后 argv[0] 即自身 exe）；源码运行用 sys.executable
+    # 用户可能未把 r2c 放入 PATH，注入脚本里必须用绝对路径调起提交
+    if getattr(sys, "frozen", False):
+        r2c_bin = str(Path(sys.argv[0]).resolve())
+    else:
+        r2c_bin = str(Path(sys.executable).resolve())
+    # 单引号转义：PowerShell 用 ''，Bash/Zsh/Fish 用 '\''
+    ps_quoted = r2c_bin.replace("'", "''")
+    sh_quoted = r2c_bin.replace("'", "'\\''")
+    if getattr(sys, "frozen", False):
+        ps_cmd = f"'{ps_quoted}' -c 'submit -'"
+        unix_cmd = f"'{sh_quoted}' -c 'submit -'"
+    else:
+        # 源码运行：python.exe -m ret2console.cli（onefile 无 -m）
+        ps_cmd = f"'{ps_quoted}' -m ret2console.cli -c 'submit -'"
+        unix_cmd = f"'{sh_quoted}' -m ret2console.cli -c 'submit -'"
+    if is_windows_shell(name):
+        if name == "cmd":
+            # cmd 无钩子机制：原生启动，不支持 flag 自动提交（用户明确仅警告）
+            console.print(
+                "[yellow]! cmd 下不支持 flag 自动提交：请将 flag 复制回 ret2console 粘贴提交[/yellow]"
+            )
+            proc = await asyncio.create_subprocess_exec(binary)
+            return await proc.wait()
+        # pwsh / powershell：PSReadLine Enter 钩子注入（-NoProfile 后手动 source 用户 profile）
+        with tempfile.TemporaryDirectory(prefix="r2c-shell-") as td:
+            tmpdir = Path(td)
+            profile = tmpdir / "r2c-profile.ps1"
+            # 5.1 以 ANSI 解析无 BOM 的 .ps1：UTF-8 中文会乱码（“宸叉敞鍏”）。
+            # 写 UTF-8 BOM：5.1/7+ 均按 UTF-8 解析，中文正常。
+            profile.write_bytes(b"\xef\xbb\xbf" + _ps_profile(ps_cmd).encode("utf-8"))
+            console.print("[dim]已注入 flag 提交 handler（输入 exit 退出后返回 ret2console）[/dim]")
+            # 把题目上下文（R2C_GAME_ID / R2C_CHALLENGE_ID）带给子 shell 内的 `submit -` 子进程
+            env = _launch_env(name, tmpdir, app.ctx.game_id, app.ctx.challenge_id)
+            # -ExecutionPolicy Bypass：注入脚本走临时文件，5.1 默认 Restricted 会拒跑（UnauthorizedAccess）
+            if name == "powershell":
+                # Windows PowerShell 5.1：-File 在非交互/重定向 stdin 下可能执行完脚本就退出，
+                # 改用 -Command 点源脚本保持 -NoExit 交互
+                cmd = f". {_ps_quote(str(profile))}"
+                proc = await asyncio.create_subprocess_exec(
+                    binary, "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", cmd, env=env
+                )
+            else:  # pwsh（PowerShell 7+）
+                proc = await asyncio.create_subprocess_exec(
+                    binary, "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-File", str(profile), env=env
+                )
+            return await proc.wait()
     with tempfile.TemporaryDirectory(prefix="r2c-shell-") as td:
         tmpdir = Path(td)
         args = [binary]
         env = _launch_env(name, tmpdir, app.ctx.game_id, app.ctx.challenge_id)
+        rc = _shell_rc(name, unix_cmd)
         if name == "bash":
-            rc = tmpdir / "r2c-rc"
-            rc.write_text(_bash_rc(), encoding="utf-8")
+            rcfile = tmpdir / "r2c-rc"
+            rcfile.write_text(rc, encoding="utf-8")
             args.append("--rcfile")
-            args.append(str(rc))
+            args.append(str(rcfile))
         elif name == "zsh":
-            (tmpdir / ".zshrc").write_text(_zsh_rc(), encoding="utf-8")
+            (tmpdir / ".zshrc").write_text(rc, encoding="utf-8")
         else:  # fish
             conf = tmpdir / "xconfig" / "fish" / "conf.d"
             conf.mkdir(parents=True)
-            (conf / "r2c-submit.fish").write_text(_fish_conf(), encoding="utf-8")
+            (conf / "r2c-submit.fish").write_text(rc, encoding="utf-8")
         console.print(f"[dim]已注入 flag 提交 handler（输入 {name} 退出后返回 ret2console）[/dim]")
         proc = await asyncio.create_subprocess_exec(*args, env=env)
         return await proc.wait()

@@ -34,7 +34,8 @@ import httpx
 from ret2console.config import LEGACY_DIR
 
 BIN_DIR = LEGACY_DIR / "bin"
-BINARY = BIN_DIR / "wsrx"
+# Windows 下二进制带 .exe 后缀（zip 内为 wsrx.exe）
+BINARY = BIN_DIR / ("wsrx.exe" if sys.platform == "win32" else "wsrx")
 GITHUB_REPO = "XDSEC/WebSocketReflectorX"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 LOCK_NAME = ".rx.is.alive"
@@ -199,11 +200,14 @@ def ensure_daemon() -> Wsrx:
     log = open(DAEMON_LOG, "ab")
     proc: subprocess.Popen | None = None
     try:
+        kwargs = {}
+        if hasattr(os, "setsid") and os.name != "nt":
+            kwargs["start_new_session"] = True
         proc = subprocess.Popen(
             [binary, "daemon", "--host", "127.0.0.1", "-p", str(port), "--secret", secret],
             stdout=log,
             stderr=log,
-            start_new_session=True,
+            **kwargs,
         )
     except OSError:
         log.close()
@@ -231,7 +235,8 @@ def download_binary(timeout: float = 60.0) -> bool:
         BIN_DIR.mkdir(parents=True, exist_ok=True)
         tmp = BIN_DIR / "wsrx.tmp"
         tmp.write_bytes(_extract_binary(blob, asset))
-        tmp.chmod(0o755)
+        if sys.platform != "win32":
+            tmp.chmod(0o755)
         os.replace(tmp, BINARY)
         return True
     except Exception:
@@ -265,6 +270,10 @@ def _asset_name(version: str) -> str | None:
             return None
         libc = "musl" if _is_musl() else "gnu"
         return f"wsrx-cli-{version}-linux-{libc}-x86_64.tar.gz"
+    if sys.platform == "win32":
+        if machine not in ("x86_64", "amd64"):
+            return None
+        return f"wsrx-cli-{version}-windows-msvc-x86_64.zip"
     if sys.platform == "darwin":
         arch = "aarch64" if machine in ("arm64", "aarch64") else "x86_64"
         return f"wsrx-cli-{version}-macos-{arch}.zip"
@@ -278,8 +287,10 @@ def _extract_binary(blob: bytes, asset: str) -> bytes:
             zp = Path(td) / "wsrx.zip"
             zp.write_bytes(blob)
             with zipfile.ZipFile(zp) as zf:
+                # Windows: target/release/wsrx.exe；macOS: target/<triple>/release/wsrx
                 for name in zf.namelist():
-                    if name.endswith("/wsrx") or name == "wsrx":
+                    base = name.rsplit("/", 1)[-1]
+                    if base in ("wsrx", "wsrx.exe"):
                         return zf.read(name)
         raise RuntimeError("wsrx not found in zip")
     with tempfile.TemporaryDirectory() as td:
