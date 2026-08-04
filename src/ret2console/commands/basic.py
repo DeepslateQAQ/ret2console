@@ -46,8 +46,8 @@ async def cmd_clear(app: App, args: list[str]) -> int:
 
 
 async def cmd_version(app: App, args: list[str]) -> int:
-    from ret2console import __version__
-    console.print(f"ret2console [bold]{__version__}[/bold] — Ret2Shell (回归终端) 终端接口")
+    from ret2console.repl import print_version_banner
+    print_version_banner()
     console.print(f"API: {app.config.api_base}")
     return 0
 

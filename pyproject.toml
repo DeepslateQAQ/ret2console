@@ -1,6 +1,6 @@
 [project]
 name = "ret2console"
-version = "0.1.0"
+version = "1.0.0"
 description = "Ret2Shell (回归终端) CTF 比赛平台的终端用户接口"
 license = "GPL-3.0-only"
 requires-python = ">=3.11"

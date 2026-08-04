@@ -124,9 +124,9 @@ def main(argv: list[str] | None = None) -> int:
         console.print(USAGE)
         return 0
 
-    if argv and argv[0] in ("-V", "--version"):
-        from ret2console import __version__
-        console.print(f"ret2console {__version__}（Ret2Shell 终端接口）")
+    if argv and argv[0] in ("-v", "-V", "--version", "version"):
+        from ret2console.repl import print_version_banner
+        print_version_banner()
         return 0
 
     if argv and argv[0] == "-c":

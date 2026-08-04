@@ -114,3 +114,37 @@ def test_is_admin_int_permissions():
 def test_main_help_flags():
     assert cli_mod.main(["-h"]) == 0
     assert cli_mod.main(["--help"]) == 0
+
+
+def test_main_version_flags(capsys):
+    """-v / -V / --version / version 均显示版本 banner（ASCII art + 作者 + 版本/Codename + 许可证）。"""
+    from ret2console import __version__, __codename__
+    for flag in ("-v", "-V", "--version", "version"):
+        assert cli_mod.main([flag]) == 0
+        out = capsys.readouterr().out
+        assert f"Version {__version__}" in out
+        assert f"Codename {__codename__}" in out
+        assert "AstralFlare-owo/Ret2Console" in out
+        assert "Made by 岩酱ovo with FLAG" in out
+        assert "GNU General Public License V3" in out
+        assert "┏━┓" in out  # ASCII art 首行
+    # 版本常量存在且非空（不硬编码具体值，避免改版本时同步改测试）
+    assert __version__
+    assert __codename__
+
+
+def test_version_banner_links():
+    """banner 文本的仓库/GPLv3 片段带 OSC 8 链接 span，且版本/Codename/FLAG 有高亮样式。"""
+    from ret2console import __version__, __codename__
+    from ret2console.repl import _version_banner_text
+    t = _version_banner_text()
+    spans = {t.plain[s.start:s.end]: s for s in t.spans}
+    repo_style = str(spans["AstralFlare-owo/Ret2Console"].style)
+    gpl_style = str(spans["GNU General Public License V3"].style)
+    assert "https://github.com/AstralFlare-owo/ret2console" in repo_style
+    assert "https://www.gnu.org/licenses/gpl-3.0.html" in gpl_style
+    # 版本/Codename/FLAG 高亮
+    assert "cyan" in str(spans[__version__].style)
+    assert "magenta" in str(spans[__codename__].style)
+    assert "red" in str(spans["FLAG"].style)
+    assert "underline" in repo_style  # 仓库下划线

@@ -52,6 +52,38 @@ def print_splash() -> None:
     console.print(t)
 
 
+def _version_banner_text() -> Text:
+    """构造版本 banner 的 Rich Text（含 OSC 8 链接与高亮），便于测试 span。"""
+    from ret2console import __version__, __codename__
+    from rich.text import Text
+    t = Text()
+    t.append(
+        "AstralFlare-owo/Ret2Console",
+        style="bold blue underline link https://github.com/AstralFlare-owo/ret2console",
+    )
+    t.append(" · Made by 岩酱ovo with ")
+    t.append("FLAG", style="bold red")
+    t.append("\n", style="bold")
+    t.append("Version ", style="bold")
+    t.append(__version__, style="bold cyan")
+    t.append(" (Codename ", style="bold")
+    t.append(__codename__, style="bold magenta")
+    t.append(")\n\n", style="bold")
+    t.append("Licensed with ")
+    t.append(
+        "GNU General Public License V3",
+        style="bold green link https://www.gnu.org/licenses/gpl-3.0.html",
+    )
+    t.append(".")
+    return t
+
+
+def print_version_banner() -> None:
+    """版本 banner：ASCII art + 作者 + 版本/Codename + 许可证（供 --version 显示）。"""
+    print_splash()
+    console.print(_version_banner_text())
+
+
 def is_valid_command(word: str) -> bool:
     """命令是否有效（用于高亮）：注册表命令；shell 额外要求本机已安装。"""
     if get_command(word) is None:
