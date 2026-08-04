@@ -57,7 +57,7 @@ if (Test-Path .venv\Scripts\python.exe) {
     $py = ".venv\Scripts\python.exe"
     Write-Host "[INFO] 切换到项目 venv: $py"
 }
-& $py -c "import ret2console; print('[OK] 源码导入正常')"
+& $py -c "import ret2console; print('IMPORT_OK')"
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
 Write-Host "[INFO] Nuitka onefile 构建中（约 3-5 分钟）..."
