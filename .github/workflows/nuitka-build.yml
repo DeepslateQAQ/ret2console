@@ -3,6 +3,7 @@ name: 使用 Nuitka 构建 R2C 二进制
 on:
   workflow_dispatch:
   push:
+    branches: ["**"]
 
 permissions:
   contents: write
