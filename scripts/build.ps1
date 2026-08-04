@@ -1,4 +1,4 @@
-# 一键构建 ret2console Windows 单文件版（Nuitka onefile）。
+﻿# 一键构建 ret2console Windows 单文件版（Nuitka onefile）。
 # 需本机已安装 Windows 版 Python 3.12 + uv（或 pip）。用法: .\scripts\build.ps1
 $ErrorActionPreference = "Stop"
 

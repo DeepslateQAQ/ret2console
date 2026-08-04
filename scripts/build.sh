@@ -20,9 +20,9 @@ if [[ -z "$PY" ]]; then
 fi
 if command -v uv >/dev/null 2>&1 && [ -f .venv/bin/python ]; then
     PY=".venv/bin/python"
-    echo "→ Python: $PY（uv venv）"
+    echo "→ Python: ${PY}（uv venv）"
 else
-    echo "→ Python: $PY（系统，需已装依赖）"
+    echo "→ Python: ${PY}（系统，需已装依赖）"
 fi
 
 # 产物目录按平台：build/linux（Linux）/ build/macos（macOS）
