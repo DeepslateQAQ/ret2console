@@ -7,7 +7,12 @@
 
   outputs = { self, nixpkgs }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
       forAllSystems = f:
         nixpkgs.lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
 
@@ -23,9 +28,12 @@
             };
             cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
               inherit src;
-              hash = "sha256-buwjcLv9w3JYAs5SCngCIkOD98P2T/EMH4tP4A+JcgM=";
+              hash = "sha256-J5w+3P4mFZEWVqFME4m0lQK7rntg6bmUDqAN0QHa6bs=";
             };
-            build-system = [ pkgs.maturin ];
+            nativeBuildInputs = with pkgs.rustPlatform; [
+              cargoSetupHook
+              maturinBuildHook
+            ];
           };
         in
         pkgs.python3.pkgs.buildPythonPackage {
