@@ -209,17 +209,27 @@ async def run_repl(app: App, history_path: str | None = None) -> int:
             "  建议使用 WSL（wsl --install）运行 ret2console。[/yellow]"
         )
     await _welcome(app)
+    pending_exit = False
     while True:
         try:
             line = await session.prompt_async(HTML(build_prompt(app)))
         except KeyboardInterrupt:
-            console.print()
+            if pending_exit:
+                console.print()
+                return 0
+            pending_exit = True
+            console.print("[yellow]! 再按一次 Ctrl-C 退出[/yellow]")
             continue
         except EOFError:
             console.print()
             return 0
+        # 提交了任何输入（含空行）都会取消「再按一次退出」的待触发状态
+        pending_exit = False
         try:
             code = await dispatch(app, line)
+        except KeyboardInterrupt:
+            console.print("[red]✗ 命令已中止[/red]")
+            continue
         except ApiError as e:
             console.print(f"[red]✗ {e.message}[/red]")
         except Exception as e:  # 命令异常不杀死 REPL
