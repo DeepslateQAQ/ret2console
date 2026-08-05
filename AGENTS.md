@@ -89,7 +89,7 @@ Native outputs are under `build/{linux,macos,win}/`; the container build emits `
 - Commit every completed modification before yielding; a task is not complete while its changes remain uncommitted.
 - Keep each commit focused on one coherent change. Do not mix unrelated user work into the commit.
 - Before committing, inspect the working tree and stage only files belonging to the current task. Never discard, overwrite, or reformat unrelated changes.
-- Use a concise imperative commit subject that describes the observable change, following the repository's existing history. Add a body only when the rationale or risk is not evident from the diff.
+- Use Gitmoji for every commit subject, formatted as `<code> <concise imperative subject>` (for example, `:memo: Document Gitmoji commit convention`). Choose the single Gitmoji code from https://gitmoji.dev/ that best represents the change; use its `:shortcode:` form, not the Unicode emoji. Add a body only when the rationale or risk is not evident from the diff.
 - Run the relevant verification before committing and report both the commit hash and verification result.
 
 ## Testing & QA
