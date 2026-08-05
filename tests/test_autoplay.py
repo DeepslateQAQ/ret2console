@@ -8,7 +8,6 @@ from ret2console.cli import _build_app
 from ret2console.repl import dispatch
 from ret2console.commands import autoplay as autoplay_mod
 from ret2console.commands.autoplay import _launch_args
-from ret2console.wsrx import Wsrx
 
 
 class AutoBackend:
@@ -152,29 +151,27 @@ def fast_sleep(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", noop)
 
 
-def _fake_agent_env(monkeypatch, tmp_path, app, *, wsrx_mode: str | None = "daemon"):
-    """autoplay 交互与执行环境的公共 mock；返回捕获器。"""
+def _fake_agent_env(monkeypatch, tmp_path, app):
+    """Autoplay interaction and process environment shared by tests."""
     launched = {}
 
     class FakeProc:
-        pid = 1234
         async def wait(self):
             return 0
 
-    async def fake_exec(*args, env=None, **kw):
+    async def fake_exec(*args, **kwargs):
         launched["args"] = args
         return FakeProc()
 
     monkeypatch.setattr(autoplay_mod.shutil, "which", lambda a: f"/usr/bin/{a}" if a == "codex" else None)
-    async def fake_confirm(q, **kw):
+
+    async def fake_confirm(question, **kwargs):
         return True
 
     monkeypatch.setattr(autoplay_mod, "confirm", fake_confirm)
     monkeypatch.setattr(autoplay_mod.asyncio, "create_subprocess_exec", fake_exec)
     app.config.autoplay_dir = str(tmp_path / "autoplay")
     app.ctx.set_challenge(3, 5)
-    if wsrx_mode == "daemon":
-        app.wsrx = Wsrx("daemon", api_port=9999)
     return launched
 
 
@@ -187,14 +184,16 @@ async def test_autoplay_reuses_running_instance(tmp_path, monkeypatch):
     })
     app = _app(backend)
     _fake_agent_env(monkeypatch, tmp_path, app)
-    tunnels = []
-    monkeypatch.setattr(autoplay_mod, "pool_instances", lambda st: [])
-    monkeypatch.setattr(autoplay_mod, "pick_free_port", lambda: 40001)
-    monkeypatch.setattr(autoplay_mod, "tunnel_add", lambda st, local, remote, label=None: tunnels.append((local, remote)))
-    monkeypatch.setattr(autoplay_mod, "save_tunnel", lambda *a, **kw: None)
+    added = []
+
+    async def add(remote, **ownership):
+        added.append((remote, ownership))
+        return "127.0.0.1:40001"
+
+    monkeypatch.setattr(app.wsrx, "add", add)
     assert await dispatch(app, "autoplay") == 0
     assert backend.posted_instance is False
-    assert tunnels and tunnels[0][0] == 40001
+    assert added and added[0][1] == {"game_id": 3, "challenge_id": 5}
     text = (tmp_path / "autoplay" / "5" / "任务书.md").read_text(encoding="utf-8")
     assert "## 实例连接" in text
     assert "127.0.0.1:40001" in text
@@ -206,10 +205,10 @@ async def test_autoplay_starts_instance_when_missing(tmp_path, monkeypatch, fast
     backend = AutoBackend()  # 初始无实例，POST 后才有
     app = _app(backend)
     _fake_agent_env(monkeypatch, tmp_path, app)
-    monkeypatch.setattr(autoplay_mod, "pool_instances", lambda st: [])
-    monkeypatch.setattr(autoplay_mod, "pick_free_port", lambda: 40002)
-    monkeypatch.setattr(autoplay_mod, "tunnel_add", lambda *a, **kw: None)
-    monkeypatch.setattr(autoplay_mod, "save_tunnel", lambda *a, **kw: None)
+    async def add(remote, **ownership):
+        return "127.0.0.1:40002"
+
+    monkeypatch.setattr(app.wsrx, "add", add)
     assert await dispatch(app, "autoplay") == 0
     assert backend.posted_instance is True
     text = (tmp_path / "autoplay" / "5" / "任务书.md").read_text(encoding="utf-8")
@@ -217,16 +216,24 @@ async def test_autoplay_starts_instance_when_missing(tmp_path, monkeypatch, fast
 
 
 @pytest.mark.asyncio
-async def test_autoplay_without_wsrx_notes_no_tunnel(tmp_path, monkeypatch):
-    """wsrx 不可用：任务书明确说明未建立隧道，不报错。"""
+async def test_autoplay_one_failed_port_keeps_success(tmp_path, monkeypatch):
     backend = AutoBackend(instance={
-        "id": 1, "state": "Running", "traffic": "traffic-nano", "ports": [5000],
+        "id": 1, "state": "Running", "traffic": "traffic-nano", "ports": [5000, 6000],
         "challenge_id": 5, "challenge_name": "签到",
     })
     app = _app(backend)
-    _fake_agent_env(monkeypatch, tmp_path, app, wsrx_mode=None)  # Wsrx() mode=none
+    _fake_agent_env(monkeypatch, tmp_path, app)
+    calls = 0
+
+    async def add(remote, **ownership):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("bind failed")
+        return "127.0.0.1:40003"
+
+    monkeypatch.setattr(app.wsrx, "add", add)
     assert await dispatch(app, "autoplay") == 0
     text = (tmp_path / "autoplay" / "5" / "任务书.md").read_text(encoding="utf-8")
-    assert "## 实例连接" in text
-    assert "未建立到靶机的隧道" in text
-    assert "127.0.0.1:" not in text
+    assert "127.0.0.1:40003" in text
+    assert calls == 2

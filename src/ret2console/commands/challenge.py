@@ -8,17 +8,7 @@ from ret2console.api.client import ApiError
 from ret2console.commands import Command, register
 from ret2console.output import console, format_ts, render_markdown
 from ret2console.state import App
-from ret2console.wsrx import (
-    load_tunnels,
-    pick_free_port,
-    pool_instances,
-    remove_tunnel,
-    save_tunnel,
-    tunnel_add,
-    tunnel_remove,
-    tunnel_status,
-    wsrx_link,
-)
+from ret2console.wsrx import tunnel_status, wsrx_link
 
 
 async def _get_instances(app: App, gid: int, cid: int | None) -> list[dict]:
@@ -131,16 +121,13 @@ async def cmd_challenge_instance(app: App, args: list[str]) -> int:
 
 
 async def cmd_challenge_connect(app: App, args: list[str]) -> int:
-    """建立到实例的 wsrx 隧道（后台 daemon / GUI HTTP 控制，不前台阻塞）。"""
+    """Establish in-process libwsrx tunnels to the running instance."""
     gid = app.ctx.game_id
     cid = app.ctx.challenge_id
     if args and args[0].isdigit():
         cid = int(args[0])
     if gid is None:
         console.print("[yellow]! 请先进入比赛上下文：cd /contests/<id> 或 contest use <id>[/yellow]")
-        return 1
-    if app.wsrx.mode == "none":
-        console.print("[yellow]! wsrx 不可用（未检测到 GUI 且 daemon 启动失败），靶机远程访问不可用[/yellow]")
         return 1
     try:
         items = await _get_instances(app, gid, cid)
@@ -156,37 +143,33 @@ async def cmd_challenge_connect(app: App, args: list[str]) -> int:
     if not ports:
         console.print("[yellow]! 实例未暴露任何端口，无法建立隧道[/yellow]")
         return 1
-    try:
-        existing = {str(p.get("remote") or "") for p in pool_instances(app.wsrx)}
-    except Exception:
-        existing = set()
-    created: list[tuple[str, int]] = []  # (traffic:local, local)
-    label = f"{inst.get('challenge_name') or cid} ({inst.get('game_name') or gid})"
+    existing_remotes = {item["remote"] for item in app.wsrx.pool_instances()}
+    created: list[tuple[str, str]] = []
     for port in ports:
-        link = wsrx_link(app.api.base_url, traffic, port)
-        if link in existing:
-            console.print(f"[dim]隧道已存在（{link}），跳过[/dim]")
+        remote = wsrx_link(app.api.base_url, traffic, port)
+        if remote in existing_remotes:
+            console.print(f"[dim]隧道已存在（{remote}），跳过[/dim]")
             continue
-        local = pick_free_port()
         try:
-            tunnel_add(app.wsrx, local, link, label=label)
+            local = await app.wsrx.add(remote, game_id=gid, challenge_id=int(inst.get("challenge_id") or cid or 0))
         except Exception as e:
-            console.print(f"[red]✗ 隧道建立失败（{link}）: {e}[/red]")
-            for key, lp in created:
-                tunnel_remove(app.wsrx, lp)
-                remove_tunnel(key)
+            console.print(f"[red]✗ 隧道建立失败（{remote}）: {e}[/red]")
+            for _, rollback_local in created:
+                try:
+                    await app.wsrx.remove(rollback_local)
+                except Exception:
+                    pass
             return 1
-        save_tunnel(traffic, local, game_id=gid, challenge_id=cid)
-        created.append((f"{traffic}:{local}", local))
-        console.print(f"[green]✓[/green] 本地已映射到 [bold]127.0.0.1:{local}[/bold]（{link}）")
+        if remote not in existing_remotes:
+            created.append((remote, local))
+        console.print(f"[green]✓[/green] 本地已映射到 [bold]{local}[/bold]（{remote}）")
     if created:
-        who = "wsrx-desktop" if app.wsrx.mode == "desktop" else "后台 wsrx daemon"
-        console.print(f"[dim]隧道由 {who} 托管：challenge instance 查看状态，challenge disconnect 关闭[/dim]")
+        console.print("[dim]隧道由当前 ret2console 进程托管：challenge instance 查看状态，challenge disconnect 关闭[/dim]")
     return 0
 
 
 async def cmd_challenge_disconnect(app: App, args: list[str]) -> int:
-    """关闭本地隧道（不停止实例）：challenge disconnect [题目id]。"""
+    """Close retained local tunnels without stopping the instance."""
     gid = app.ctx.game_id
     cid = app.ctx.challenge_id
     if args and args[0].isdigit():
@@ -194,21 +177,7 @@ async def cmd_challenge_disconnect(app: App, args: list[str]) -> int:
     if gid is None:
         console.print("[yellow]! 请先进入比赛上下文[/yellow]")
         return 1
-    records = load_tunnels()
-    closed = 0
-    for key, rec in list(records.items()):
-        if int(rec.get("game_id") or 0) != gid:
-            continue
-        if cid is not None and int(rec.get("challenge_id") or -1) != cid:
-            continue
-        local = rec.get("port")
-        if local:
-            try:
-                tunnel_remove(app.wsrx, int(local))
-            except Exception:
-                pass
-        remove_tunnel(key)
-        closed += 1
+    closed = await app.wsrx.remove_for(game_id=gid, challenge_id=cid)
     if closed:
         console.print(f"[green]✓[/green] 已关闭 {closed} 条隧道")
     else:
@@ -217,7 +186,7 @@ async def cmd_challenge_disconnect(app: App, args: list[str]) -> int:
 
 
 async def cmd_challenge_stop(app: App, args: list[str]) -> int:
-    """关闭当前实例并清理其本地隧道。"""
+    """Close the current instance and its retained local tunnels."""
     gid = app.ctx.game_id
     cid = app.ctx.challenge_id
     if args and args[0].isdigit():
@@ -225,15 +194,7 @@ async def cmd_challenge_stop(app: App, args: list[str]) -> int:
     if gid is None or cid is None:
         console.print("[yellow]! 请先进入题目上下文[/yellow]")
         return 1
-    for key, rec in list(load_tunnels().items()):
-        if int(rec.get("game_id") or 0) == gid and int(rec.get("challenge_id") or -1) == cid:
-            local = rec.get("port")
-            if local:
-                try:
-                    tunnel_remove(app.wsrx, int(local))
-                except Exception:
-                    pass
-            remove_tunnel(key)
+    await app.wsrx.remove_for(game_id=gid, challenge_id=cid)
     try:
         await app.api.delete_json(f"/game/{gid}/challenge/{cid}/instance")
     except ApiError as e:

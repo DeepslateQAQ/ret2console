@@ -192,67 +192,43 @@ Agent 启动方式（实测/待实测）：
 - `reasonix` → `reasonix code` 进 code 模式 TUI；**不支持 TUI 初始消息** → 打印提示词供复制，确认后启动
 - 执行方式以各家 `--help` 实测为准，任务书兜底永远在
 
-## 13. wsrx（WebSocketReflectorX）检测与隧道
+## 13. libwsrx 进程内隧道
 
-ret2shell 远程容器访问依赖 wsrx。ret2console 三件事：
+ret2console 直接依赖 Python 包 `libwsrx`，不检测或下载 `wsrx` CLI，不启动 daemon，
+也不注册或调用 wsrx-desktop。`App.wsrx` 是当前应用进程内唯一的隧道所有者。
 
-### 13.1 启动检测
-1. 扫 XDG 数据目录找锁文件 `.rx.is.alive`（wsrx-desktop 单实例锁），读到端口后
-   GET `http://127.0.0.1:{port}/version` 确认存活 → **GUI 模式**
-2. GUI 存在 → 注册控制源：POST `http://127.0.0.1:{port}/connect`，
-   **Origin = 配置的 r2s 平台域名**（`wsrx_origin(api_base)` 派生，如
-   `https://ctf.xidian.edu.cn`，与网页端浏览器同一 scope），wsrx-desktop 弹窗要求用户确认；
-   GET /connect 状态：202 已授权 / 201 待确认 / 403 未注册。
-   隧道一律带该 Origin 建立（GUI 中按此 scope 分组展示，与网页端并列）
-3. GUI 不存在 → 找 CLI binary（`which wsrx` / `~/.ret2console/bin/wsrx`，缺失自动从 GitHub 下载），
-   启动**后台 daemon**：`wsrx daemon --host 127.0.0.1 -p <空闲端口> --secret <随机>`，
-   pid/port/secret 存 `~/.ret2console/daemon.json`（600），下次启动复用（GET /pool 健康检查）
-4. 都失败 → 启动时黄色警告「wsrx 不可用，challenge connect 无法使用」
+### 13.1 端点绑定与所有权
 
-**不再前台 spawn `wsrx connect`**：所有隧道统一走 HTTP（desktop / daemon 的 `/pool`），
-connect 立即返回，隧道后台托管。
+- 每条新隧道调用 `await libwsrx.ClientEndpoint.bind("127.0.0.1:0", remote)`；端口由
+  操作系统在 bind 时原子分配，命令使用 `endpoint.local_addr` 返回的实际地址。
+- 管理器保留 `ClientEndpoint`，并记录 remote、local、game_id、challenge_id。remote URL
+  是唯一键；同一进程内重复连接完全相同的 remote 时复用现有端点。
+- `pool_instances()` 仅展示当前管理器实际保留的 live 端点；`challenge instance` 和 VFS
+  状态都从该列表读取，不使用第二份注册表或磁盘状态。
+- `remove`、`remove_for` 和 `close` 先从内存移除记录，再等待 `endpoint.shutdown()`。
+  批量清理会尝试关闭所有选中端点；重复 `close()` 是安全的。
 
-**退出清理**：REPL 正常退出（`exit`/EOF）即 SIGTERM 杀掉 daemon 并删除 `daemon.json`
-（desktop 模式不动 GUI）；`-c`/脚本模式退出**保留** daemon——后台任务语义，
-`r2c -c "challenge connect"` 后隧道仍可用。
+### 13.2 进程生命周期
 
-### 13.2 wsrx CLI（源码确认）
-```
-wsrx daemon   [--host H] [-p PORT] [-s SECRET]     # 管理员+ws 服务端
-wsrx connect  <address> [--host H] [-p PORT]       # 客户端建隧道
-wsrx serve    [--host H] [-p PORT] [-s SECRET]     # 服务端
-```
+- 端点只在创建它的 ret2console 进程存活期间可用。交互式 REPL 和 autoplay 运行期间，
+  管理器持续持有端点。
+- REPL、`-c` 和脚本模式退出时都先 `await app.wsrx.close()`，再关闭 API 客户端。
+  因此通过 `-c` 或脚本执行 `challenge connect` 后，隧道会随该一次性进程退出而关闭。
+- `challenge disconnect`、`challenge stop` 和进程退出均确定性关闭相应 listener 与活跃连接；
+  不存在 daemon pid、secret、HTTP `/pool`、desktop lock/control 或 `tunnel.json` 状态文件。
 
-### 13.3 wsrx-desktop HTTP API（源码确认，`127.0.0.1:{port}`）
-```
-GET    /pool      # 实例列表 [{label, remote, local, latency}]
-POST   /pool      # 启动实例，body InstanceData{label, remote(别名 to), local(别名 from), latency, scope_host}
-DELETE /pool      # 关闭实例，body {local(别名 key)}
-POST   /popup     # 弹窗
-GET    /connect   # 控制状态
-POST   /connect   # request_control
-PATCH  /connect   # update_website_info
-GET    /version   # 版本
-```
-CORS 按 Origin 匹配 scope host —— **操控 wsrx 的域名必须与配置的 r2s 平台域名一致**。
+### 13.3 `challenge connect <题目>` 命令
 
-### 13.4 `instance connect <题目>` 命令
-- `challenge connect [id]`：对实例每个暴露端口 POST `{本地}/pool` 建一条隧道
-  （desktop body 带 `label`；daemon body `{local, remote}`，`Authorization: <secret>`），
-  已存在的 remote 跳过；本地端口自动选空闲，输出「本地已映射到 127.0.0.1:PORT」，
-  立即返回，不阻塞终端
-- **关键协议**：`GET /api/game/{gid}/challenge/{cid}/instance` 是**管理员接口**（选手 403），
-  选手查询一律走 `GET /api/game/{gid}/instance`（返回全部实例，按 `challenge_id` 过滤）；
-  `instance.traffic` 只是 21 位 nanoid（pod label），真实地址为
-  `wss|ws://{平台域名}/api/traffic/{nanoid}?port={端口}`（与前端 `getWsrxLink` 一致），
-  每个暴露端口建立一条独立隧道
-- `challenge disconnect [id]`：按 `~/.ret2console/tunnel.json` 记录（traffic:local -> {port,
-  game_id, challenge_id}）DELETE `/pool` 关闭对应题目隧道，不停止实例
-- `challenge stop [id]`：先关隧道再 DELETE `/api/game/{gid}/challenge/{cid}/instance`
-- `challenge instance` 显示「tunnel: 未建立/已建立」（GET /pool 实时查询；
-  daemon 返回对象 HashMap、desktop 返回数组，两者都兼容）
-- `challenge start` 冲突（「you can only start one instance at the same time」）时提示
-  `challenge instance` / `challenge stop <题目id>`；`challenge stop` = `DELETE /api/game/{gid}/challenge/{cid}/instance`
+- 选手实例查询走 `GET /api/game/{gid}/instance`（challenge 级 GET 是管理员接口），再按
+  `challenge_id` 过滤。
+- `instance.traffic` 是平台 nanoid；每个暴露端口的 remote 为
+  `wss|ws://{平台域名}/api/traffic/{nanoid}?port={端口}`，与前端 `getWsrxLink` 一致。
+- 每个端口建立独立 `ClientEndpoint`，输出其实际 `127.0.0.1:PORT`。若多端口连接中
+  后续 bind 失败，本次命令新建的端点全部回滚；此前已存在的端点不受影响。
+- `challenge disconnect [id]` 按 game_id/challenge_id 关闭当前进程持有的端点，不停止实例。
+- `challenge stop [id]` 先关闭对应端点，再 DELETE
+  `/api/game/{gid}/challenge/{cid}/instance`；端点关闭错误不阻止远端实例删除。
+- `challenge start` 冲突时提示 `challenge instance` / `challenge stop <题目id>`。
 
 ## 14. ret2shell API 参考（已确认）
 
@@ -302,7 +278,7 @@ CORS 按 Origin 匹配 scope host —— **操控 wsrx 的域名必须与配置�
 3. ✅ API 客户端 + `auth`（PoW 登录/登出/status；register 参数式 + 交互式）
 4. ✅ VFS + `contest`/`challenge` 命令（列表/详情/use/doc/notice；`team` 全套；docs/files/instance 节点已挂接）
 5. ✅ 提交：`submit` + flag 粘贴识别 + 历史过滤（含分号内 flag 识别）
-6. ✅ 附件下载 + 实例 `connect` + wsrx 检测（缺失自动下载 prebuilt；`start`/`instance`/`renew`/`connect` 可用）
+6. ✅ 附件下载 + 实例 `connect` + 进程内 libwsrx 端点（`start`/`instance`/`renew`/`connect` 可用）
 7. ✅ `bulletin`（根 `/notice`）+ 动态补全缓存（比赛/题目 id + 描述列）
 8. ✅ 子 shell 注入（bash/zsh/fish）
 9. ✅ `autoplay`
@@ -311,5 +287,4 @@ CORS 按 Origin 匹配 scope host —— **操控 wsrx 的域名必须与配置�
 
 ### 已知待办
 - `challenge solve`（`GET .../solves` 解题状态）未接入命令
-- wsrx-desktop 模式实测（本机无 desktop，CLI 模式已实测）
 - 子 shell 三种 shell 的真实环境冒烟（本机仅 zsh 可用）

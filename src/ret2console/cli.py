@@ -24,7 +24,6 @@ from ret2console.repl import dispatch, run_repl
 from ret2console.state import App
 from ret2console.termimg import detect_protocol
 from ret2console.vfs_builder import build_vfs
-from ret2console.wsrx import ensure_wsrx, register_control_source, stop_daemon, wsrx_origin
 
 USAGE = """ret2console — Ret2Shell 终端接口
 
@@ -88,21 +87,6 @@ def _split_commands(text: str) -> list[str]:
 async def _run(mode: str, payload: list[str]) -> int:
     app = _build_app()
     try:
-        app.wsrx = ensure_wsrx(origin=wsrx_origin(app.config.api_base))
-        if app.wsrx.mode == "none":
-            console.print("[yellow]! wsrx 不可用（未检测到 wsrx-desktop，且 daemon 启动失败），challenge connect 无法使用[/yellow]")
-        elif app.wsrx.mode == "desktop" and mode == "repl":
-            # 控制源显示名对齐 r2s 平台配置（如「西电 CTF 终端」），拿不到就兜底
-            source_name = await app.api.platform_name() or "ret2console"
-            status = register_control_source(app.wsrx, name=source_name)
-            if status == "approved":
-                console.print(f"[dim]✓ wsrx-desktop（127.0.0.1:{app.wsrx.api_port}）已授权控制源「{source_name}」[/dim]")
-            elif status == "pending":
-                console.print(f"[yellow]! wsrx-desktop 授权待确认：请在弹窗中允许「{source_name}」管理隧道[/yellow]")
-            else:
-                console.print(f"[dim]wsrx-desktop（127.0.0.1:{app.wsrx.api_port}）已检测到（控制源未授权，隧道仍可建立）[/dim]")
-        elif app.wsrx.mode == "daemon" and mode == "repl":
-            console.print(f"[dim]✓ wsrx 后台 daemon 已就绪（127.0.0.1:{app.wsrx.api_port}，{app.wsrx.source}）[/dim]")
         if mode == "repl":
             # 终端图片协议检测（REPL 接管终端前做一次，cat 图片/附件用）
             app.graphics = detect_protocol()
@@ -110,9 +94,7 @@ async def _run(mode: str, payload: list[str]) -> int:
             return await _run_script(app, payload)
         return await run_repl(app)
     finally:
-        # REPL 退出即清理 daemon（`-c`/脚本模式保留：后台任务语义）
-        if mode == "repl" and app.wsrx.mode == "daemon":
-            stop_daemon()
+        await app.wsrx.close()
         await app.api.close()
 
 

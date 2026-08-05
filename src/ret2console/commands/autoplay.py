@@ -14,13 +14,7 @@ from ret2console.commands.challenge import _get_instances
 from ret2console.interact import confirm, select
 from ret2console.output import console
 from ret2console.state import App
-from ret2console.wsrx import (
-    pick_free_port,
-    pool_instances,
-    save_tunnel,
-    tunnel_add,
-    wsrx_link,
-)
+from ret2console.wsrx import wsrx_link
 
 AGENTS = ("codex", "claude", "opencode", "omp", "reasonix", "kimi")
 # 不支持 TUI 初始消息的 Agent：打印提示词供选手复制粘贴，确认后裸启动
@@ -90,35 +84,30 @@ async def _ensure_instance(app: App, gid: int, cid: int) -> dict | None:
 
 
 async def _ensure_tunnel(app: App, gid: int, cid: int, inst: dict) -> list[str]:
-    """为实例建立 wsrx 隧道，返回本地地址列表；wsrx 不可用/失败时返回空。"""
-    if app.wsrx.mode == "none":
-        return []
+    """Retain one in-process libwsrx endpoint per exposed instance port."""
     traffic = str(inst.get("traffic") or "")
     ports = [int(p) for p in (inst.get("ports") or []) if str(p).isdigit()]
     if not traffic or not ports:
         return []
-    try:
-        pool = pool_instances(app.wsrx)
-    except Exception:
-        pool = []
-    existing = {str(p.get("remote") or "") for p in pool}
-    by_remote = {str(p.get("remote")): str(p.get("local") or "") for p in pool if p.get("local")}
+    pool = app.wsrx.pool_instances()
+    by_remote = {
+        item["remote"]: item["local"]
+        for item in pool
+        if item.get("remote") and item.get("local")
+    }
     locals_: list[str] = []
-    label = f"{inst.get('challenge_name') or cid} ({inst.get('game_name') or gid})"
     for port in ports:
-        link = wsrx_link(app.api.base_url, traffic, port)
-        if link in existing:
-            if by_remote.get(link):
-                locals_.append(by_remote[link])
+        remote = wsrx_link(app.api.base_url, traffic, port)
+        existing = by_remote.get(remote)
+        if existing:
+            locals_.append(existing)
             continue
-        local = pick_free_port()
         try:
-            tunnel_add(app.wsrx, local, link, label=label)
+            local = await app.wsrx.add(remote, game_id=gid, challenge_id=cid)
         except Exception as e:
-            console.print(f"[yellow]! 隧道建立失败（{link}）: {e}[/yellow]")
+            console.print(f"[yellow]! 隧道建立失败（{remote}）: {e}[/yellow]")
             continue
-        save_tunnel(traffic, local, game_id=gid, challenge_id=cid)
-        locals_.append(f"127.0.0.1:{local}")
+        locals_.append(local)
     return locals_
 
 
@@ -132,7 +121,7 @@ def _append_conn(taskbook: Path, conn: list[str], api_base: str) -> None:
         lines.append("说明：上述本地地址已通过隧道映射到题目靶机，可直接访问。")
         lines.append(f"- 平台: {api_base}")
     else:
-        lines.append("（未建立到靶机的隧道，实例可能仍在构建或本机无 wsrx）")
+        lines.append("（未建立到靶机的隧道，实例可能仍在构建或未暴露端口）")
     with taskbook.open("a", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -219,8 +208,7 @@ async def cmd_autoplay(app: App, args: list[str]) -> int:
         return 1
     inst = await startup
     conn = await _ensure_tunnel(app, gid, cid, inst) if inst else []
-    if conn or app.wsrx.mode == "none":
-        _append_conn(taskbook, conn, app.config.api_base)
+    _append_conn(taskbook, conn, app.config.api_base)
     prompt = taskbook.read_text(encoding="utf-8")
     console.print(f"[green]✓[/green] 任务书已生成: {taskbook}")
     if agent in NO_INITIAL_PROMPT_AGENTS:
