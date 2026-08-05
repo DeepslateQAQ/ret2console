@@ -1,6 +1,6 @@
 import pytest
 
-from ret2console.vfs import Vfs, VfsError, dir_node, file_node
+from ret2console.vfs import Vfs, VfsError, dir_node, file_node, normalize_path
 
 
 async def _simple_build():
@@ -54,11 +54,32 @@ async def test_missing_path():
 
 
 @pytest.mark.asyncio
+async def test_resolve_with_dotdot():
+    vfs = await _simple_build()
+    node = await vfs.resolve("/contests/3/challenges/5/..")
+    assert node.name == "challenges"
+    node = await vfs.resolve("/contests/3/../3/challenges/5")
+    assert node.challenge_id == 5
+    node = await vfs.resolve("/contests/3/../../..")
+    assert node.name == "/"
+
+
+@pytest.mark.asyncio
 async def test_parent_path():
     vfs = await _simple_build()
     assert vfs.parent_path("/contests/3/challenges/5") == "/contests/3/challenges"
     assert vfs.parent_path("/contests") == "/"
     assert vfs.parent_path("/") == "/"
+
+
+def test_normalize_path():
+    assert normalize_path("/contests/3/../challenges/5") == "/contests/challenges/5"
+    assert normalize_path("/contests/3/challenges/5/..") == "/contests/3/challenges"
+    assert normalize_path("..") == "/"
+    assert normalize_path("/../..") == "/"
+    assert normalize_path("a//b/./c") == "/a/b/c"
+    assert normalize_path("") == "/"
+    assert normalize_path("/") == "/"
 
 
 def test_team_org_name_prefers_name_field():

@@ -42,6 +42,20 @@ def file_node(
     return Node(name, "file", game_id=game_id, challenge_id=challenge_id, meta=meta, reader=reader)
 
 
+def normalize_path(path: str) -> str:
+    """把路径中的 . / .. 段折叠为规范形式；.. 越过根目录时钳制在根。"""
+    parts: list[str] = []
+    for seg in path.split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(seg)
+    return "/" + "/".join(parts)
+
+
 class Vfs:
     """只读虚拟文件系统。当前比赛/题目上下文由外部 Context 维护（cd 即 use）。"""
 
@@ -74,20 +88,11 @@ class Vfs:
         return None
 
     async def resolve(self, path: str) -> Node:
-        if path == "":
-            path = "/"
-        parts: list[str] = []
-        for seg in path.split("/"):
-            if seg in ("", "."):
-                continue
-            if seg == "..":
-                if parts:
-                    parts.pop()
-                continue
-            parts.append(seg)
         node = self.root
         walked: list[str] = []
-        for seg in parts:
+        for seg in normalize_path(path).split("/"):
+            if not seg:
+                continue
             walked.append(seg)
             if node.kind != "dir":
                 raise VfsError(f"不是目录: /{'/'.join(walked)}")
@@ -121,19 +126,10 @@ class Vfs:
 
     def sync_resolve(self, path: str) -> Node | None:
         """同步解析路径；任何未加载的目录段都视为失败（返回 None）。"""
-        if path == "":
-            path = "/"
-        parts: list[str] = []
-        for seg in path.split("/"):
-            if seg in ("", "."):
-                continue
-            if seg == "..":
-                if parts:
-                    parts.pop()
-                continue
-            parts.append(seg)
         node = self.root
-        for seg in parts:
+        for seg in normalize_path(path).split("/"):
+            if not seg:
+                continue
             if node.kind != "dir" or not node.loaded or node.children is None:
                 return None
             node = self._find(node, seg)

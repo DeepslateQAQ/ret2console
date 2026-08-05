@@ -7,7 +7,7 @@ from ret2console.output import make_table
 from ret2console.commands import EXIT_CODE, Command, REGISTRY, commands_by_category, register
 from ret2console.output import console
 from ret2console.state import App
-from ret2console.vfs import VfsError
+from ret2console.vfs import VfsError, normalize_path
 
 
 async def cmd_help(app: App, args: list[str]) -> int:
@@ -65,12 +65,13 @@ async def cmd_pwd(app: App, args: list[str]) -> int:
 async def cmd_ls(app: App, args: list[str]) -> int:
     long_format = False
     recursive = False
+    show_dot = False
     path_args: list[str] = []
     for a in args:
         if a.startswith("-") and len(a) > 1:
             long_format = long_format or "l" in a
             recursive = recursive or "R" in a
-            # "a" 在虚拟文件系统中无隐藏节点，接受但不改变行为
+            show_dot = show_dot or "a" in a  # -a：显示 . 与 .. 条目（Unix 惯例）
         else:
             path_args.append(a)
     target = path_args[0] if path_args else "."
@@ -87,12 +88,12 @@ async def cmd_ls(app: App, args: list[str]) -> int:
         if gid is not None:
             solved, running = await _load_challenge_status(app, gid)
     if long_format:
-        return _render_long(app, nodes, solved=solved, running=running)
+        return _render_long(app, nodes, solved=solved, running=running, show_dot=show_dot)
     if recursive:
-        return await _render_recursive(app, path, nodes, solved=solved, running=running)
-    if not nodes:
+        return await _render_recursive(app, path, nodes, solved=solved, running=running, show_dot=show_dot)
+    if not nodes and not show_dot:
         return 0
-    console.print(_render_short(nodes, solved=solved, running=running))
+    console.print(_render_short(nodes, solved=solved, running=running, show_dot=show_dot))
     return 0
 
 
@@ -114,8 +115,11 @@ def _challenge_style(n, solved: set[int], running: set[int]) -> str:
     return "bold bright_blue"
 
 
-def _render_short(nodes: list, solved: set[int] | None = None, running: set[int] | None = None):
-    """短格式：目录蓝色、特殊文件金色/红色、一般文件默认色；题目目录带状态。"""
+def _render_short(nodes: list, solved: set[int] | None = None, running: set[int] | None = None, *, show_dot: bool = False):
+    """短格式：目录蓝色、特殊文件金色/红色、一般文件默认色；题目目录带状态。
+
+    show_dot 时在最前面列出 . 与 ..（Unix `ls -a` 惯例）。
+    """
     solved = solved or set()
     running = running or set()
     from ret2console.output import RUNNING_STAR_STYLE
@@ -123,6 +127,9 @@ def _render_short(nodes: list, solved: set[int] | None = None, running: set[int]
     dirs = [n for n in nodes if n.kind == "dir"]
     files = [n for n in nodes if n.kind == "file"]
     parts: list[Text] = []
+    if show_dot:
+        parts.append(Text("./", style="bold bright_blue"))
+        parts.append(Text("../", style="bold bright_blue"))
     for n in dirs:
         style = "bold bright_blue"
         if n.challenge_id is not None:
@@ -139,15 +146,15 @@ def _render_short(nodes: list, solved: set[int] | None = None, running: set[int]
 
 
 async def _render_recursive(
-    app: App, path: str, nodes: list, solved: set[int] | None = None, running: set[int] | None = None
+    app: App, path: str, nodes: list, solved: set[int] | None = None, running: set[int] | None = None, *, show_dot: bool = False
 ) -> int:
     """ls -R 递归目录树：目录头 + 子项（懒加载逐层展开）。"""
     solved = solved or set()
     running = running or set()
     header = path if path != "/" else "/"
     console.print(f"[bold]{header}:[/bold]")
-    if nodes:
-        console.print(_render_short(nodes, solved=solved, running=running))
+    if nodes or show_dot:
+        console.print(_render_short(nodes, solved=solved, running=running, show_dot=show_dot))
     for n in nodes:
         if n.kind != "dir":
             continue
@@ -164,11 +171,11 @@ async def _render_recursive(
             if gid is not None:
                 sub_solved, sub_running = await _load_challenge_status(app, gid)
         console.print()
-        await _render_recursive(app, sub, children, solved=sub_solved, running=sub_running)
+        await _render_recursive(app, sub, children, solved=sub_solved, running=sub_running, show_dot=show_dot)
     return 0
 
 
-def _render_long(app: App, nodes: list, solved: set[int] | None = None, running: set[int] | None = None) -> int:
+def _render_long(app: App, nodes: list, solved: set[int] | None = None, running: set[int] | None = None, *, show_dot: bool = False) -> int:
     """ls -l 长格式：类型 + 名称 + 元信息（id/标题，来自缓存）。"""
     solved = solved or set()
     running = running or set()
@@ -177,6 +184,9 @@ def _render_long(app: App, nodes: list, solved: set[int] | None = None, running:
     table.add_column("", width=2)
     table.add_column("名称")
     table.add_column("信息", style="dim")
+    if show_dot:
+        table.add_row("[bold bright_blue]d[/bold bright_blue]", "[bold bright_blue]./[/bold bright_blue]", "")
+        table.add_row("[bold bright_blue]d[/bold bright_blue]", "[bold bright_blue]../[/bold bright_blue]", "")
     for n in nodes:
         kind = "d" if n.kind == "dir" else "f"
         if n.kind == "dir":
@@ -272,14 +282,9 @@ async def cmd_status(app: App, args: list[str]) -> int:
 def _resolve_path(app: App, target: str) -> str:
     if target in (".", ""):
         return app.ctx.vfs_path
-    if target == "..":
-        return app.vfs.parent_path(app.ctx.vfs_path)
     if target.startswith("/"):
-        return target
-    base = app.ctx.vfs_path
-    if base.endswith("/"):
-        return base + target
-    return base + "/" + target
+        return normalize_path(target)
+    return normalize_path(app.ctx.vfs_path + "/" + target)
 
 
 async def cmd_notice(app: App, args: list[str]) -> int:

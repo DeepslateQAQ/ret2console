@@ -29,6 +29,17 @@ def test_resolve_path():
     assert _resolve_path(app, "..") == "/contests"
     assert _resolve_path(app, "/") == "/"
     assert _resolve_path(app, "challenges") == "/contests/3/challenges"
+    # 路径中的 .. 必须被折叠（prompt 不出现脏路径）
+    app.ctx.set_path("/contests/3/challenges/5", 3, 5)
+    assert _resolve_path(app, "../..") == "/contests/3"
+    assert _resolve_path(app, "../../..") == "/contests"
+    assert _resolve_path(app, "../another_dir") == "/contests/3/challenges/another_dir"
+    assert _resolve_path(app, "./info/../README") == "/contests/3/challenges/5/README"
+    assert _resolve_path(app, "/contests/3/../") == "/contests"
+    assert _resolve_path(app, "/contests/3/../contests/../notice") == "/contests/notice"
+    app.ctx.set_path("/", None, None)
+    assert _resolve_path(app, "..") == "/"
+    assert _resolve_path(app, "../../../x") == "/x"
 
 
 def test_file_style_colors():
@@ -54,6 +65,44 @@ async def test_ls_recursive(monkeypatch):
     assert code == 0
     text = " ".join(str(x) for x in printed)
     assert "/:" in text and "contests:" in text and "3:" in text
+
+
+@pytest.mark.asyncio
+async def test_ls_dash_a_shows_dot_entries(monkeypatch):
+    """ls -a 列出 . 与 .. 条目（Unix 惯例），默认 ls 不显示。"""
+    from ret2console.output import console
+    from ret2console.commands.basic import _render_short
+
+    app = App()
+    app.vfs.build(contests_loader=lambda: [dir_node("3", game_id=3, meta="比赛3")])
+    printed = []
+    monkeypatch.setattr(console, "print", lambda *a, **kw: printed.append(a))
+
+    code = await dispatch(app, "ls -a /")
+    assert code == 0
+    text = " ".join(str(x) for x in printed)
+    assert "./" in text and "../" in text and "contests/" in text
+    # . / .. 排在真实节点之前
+    assert text.find("./") < text.find("contests/")
+
+    printed.clear()
+    code = await dispatch(app, "ls /")
+    assert code == 0
+    text = " ".join(str(x) for x in printed)
+    assert "./" not in text and "../" not in text
+
+    # 空目录 + -a 也显示两行；-la 长格式同样带（前两行即 . 与 ..）
+    out = _render_short([], show_dot=True)
+    assert out.plain == "./  ../"
+    printed.clear()
+    code = await dispatch(app, "ls -la /")
+    assert code == 0
+    import io
+    from rich.console import Console
+    buf = io.StringIO()
+    Console(file=buf, width=200).print(printed[0][0])
+    lines = [ln for ln in buf.getvalue().splitlines() if ln.strip()]
+    assert lines[0].strip().endswith("./") and lines[1].strip().endswith("../")
 
 
 def test_render_short_challenge_status():
