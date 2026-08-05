@@ -229,6 +229,11 @@ ret2console 直接依赖 Python 包 `libwsrx`，不检测或下载 `wsrx` CLI，
 - `challenge stop [id]` 先关闭对应端点，再 DELETE
   `/api/game/{gid}/challenge/{cid}/instance`；端点关闭错误不阻止远端实例删除。
 - `challenge start` 冲突时提示 `challenge instance` / `challenge stop <题目id>`。
+- `challenge start` 的 POST 成功后，最多等待 30 秒，直到实例同时满足 `running` 且
+  `traffic` 可用；该就绪期限包含状态查询耗时，并独立于每次 HTTP 请求的传输超时。
+  到期时命令返回状态 `0`，提示远端启动仍可能继续，并引导稍后查询状态和连接。
+- 在上述提交后等待期间按 Ctrl-C 只停止本地轮询，返回状态 `130`，不撤销服务器端启动，
+  交互式客户端随后返回提示符。`challenge connect` 仍是绑定本地隧道的独立命令。
 
 ## 14. ret2shell API 参考（已确认）
 

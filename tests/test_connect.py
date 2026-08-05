@@ -1,8 +1,10 @@
 """Challenge connection ownership and lifecycle tests."""
 
+import asyncio
 import httpx
 import pytest
 
+from ret2console.commands import challenge as challenge_mod
 from ret2console import wsrx as wsrx_mod
 from ret2console.cli import _build_app
 from ret2console.repl import dispatch
@@ -27,6 +29,7 @@ class InstanceBackend:
     def __init__(self, ports=None):
         self.ports = ports
         self.deleted = False
+        self.post_count = 0
 
     def handler(self, request):
         path = request.url.path
@@ -39,6 +42,7 @@ class InstanceBackend:
             self.deleted = True
             return httpx.Response(200, json=None)
         if request.method == "POST" and path == "/api/game/3/challenge/5/instance":
+            self.post_count += 1
             return httpx.Response(200, content=b"")
         return httpx.Response(404, json={"message": f"unexpected {request.method} {path}"})
 
@@ -163,7 +167,7 @@ async def test_start_waits_until_instance_is_connectable(monkeypatch, capsys):
     assert backend.get_count == 3
     assert "等待实例创建" in output
     assert "Pending" in output
-    assert "实例连接成功" in output
+    assert "实例已就绪" in output
     assert "ports: 8000" in output
 
 
@@ -184,3 +188,100 @@ async def test_start_returns_error_when_instance_fails(monkeypatch, capsys):
     assert backend.get_count == 2
     assert "Pending" in output
     assert "实例启动失败，状态: Failed" in output
+
+
+@pytest.mark.asyncio
+async def test_wait_for_instance_times_out_during_status_query(monkeypatch):
+    class BlockingApi:
+        def __init__(self):
+            self.calls = 0
+            self.blocked = asyncio.Event()
+
+        async def list_instances(self, gid):
+            assert gid == 3
+            self.calls += 1
+            if self.calls == 1:
+                return [{"state": "Running", "challenge_id": 5}]
+            self.blocked.set()
+            await asyncio.Event().wait()
+
+    api = BlockingApi()
+    app = _build_app()
+    app.api = api
+    monkeypatch.setattr(challenge_mod, "INSTANCE_POLL_INTERVAL", 0)
+
+    with pytest.raises(challenge_mod._InstanceWaitTimedOut):
+        await asyncio.wait_for(
+            challenge_mod._wait_for_instance(app, 3, 5, timeout=0.01),
+            timeout=1.0,
+        )
+
+    assert api.calls >= 1
+    assert api.blocked.is_set()
+
+
+@pytest.mark.asyncio
+async def test_start_timeout_keeps_accepted_request(monkeypatch, capsys):
+    async def timed_out(app, gid, cid, *, timeout):
+        assert timeout == 30.0
+        raise challenge_mod._InstanceWaitTimedOut
+
+    monkeypatch.setattr(challenge_mod, "_wait_for_instance", timed_out)
+    backend = InstanceBackend()
+    app = _app(backend)
+
+    assert await dispatch(app, "challenge start") == 0
+    output = capsys.readouterr().out
+    assert backend.post_count == 1
+    assert "30 秒内实例尚未就绪" in output
+    assert "challenge instance 5" in output
+    assert "challenge connect 5" in output
+    assert "实例已就绪" not in output
+
+
+@pytest.mark.asyncio
+async def test_start_cancellation_stops_only_local_wait(capsys):
+    class BlockingApi:
+        def __init__(self):
+            self.post_count = 0
+            self.get_count = 0
+            self.delete_count = 0
+            self.get_started = asyncio.Event()
+
+        async def post_json(self, path):
+            assert path == "/game/3/challenge/5/instance"
+            self.post_count += 1
+
+        async def list_instances(self, gid):
+            assert gid == 3
+            self.get_count += 1
+            self.get_started.set()
+            await asyncio.Event().wait()
+
+        async def delete_json(self, path):
+            self.delete_count += 1
+
+    api = BlockingApi()
+    app = _build_app()
+    app.api = api
+    app.ctx.set_challenge(3, 5)
+    continued = asyncio.Event()
+
+    async def run_command():
+        result = await dispatch(app, "challenge start")
+        continued.set()
+        return result
+
+    task = asyncio.create_task(run_command())
+    await asyncio.wait_for(api.get_started.wait(), timeout=1.0)
+    task.cancel()
+
+    assert await task == 130
+    output = capsys.readouterr().out
+    assert continued.is_set()
+    assert api.post_count == 1
+    assert api.get_count == 1
+    assert api.delete_count == 0
+    assert "已停止等待" in output
+    assert "challenge instance 5" in output
+    assert "challenge connect 5" in output
