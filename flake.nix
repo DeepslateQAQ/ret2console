@@ -7,11 +7,35 @@
 
   outputs = { self, nixpkgs }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
       forAllSystems = f:
         nixpkgs.lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
 
       ret2console = pkgs:
+        let
+          libwsrx = pkgs.python3.pkgs.buildPythonPackage rec {
+            pname = "libwsrx";
+            version = "0.1.0";
+            pyproject = true;
+            src = pkgs.fetchPypi {
+              inherit pname version;
+              hash = "sha256-M2ZaRPsEl10JxxdXmMM64ZaskciaouPuV2QtwZb5pLg=";
+            };
+            cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+              inherit src;
+              hash = "sha256-J5w+3P4mFZEWVqFME4m0lQK7rntg6bmUDqAN0QHa6bs=";
+            };
+            nativeBuildInputs = with pkgs.rustPlatform; [
+              cargoSetupHook
+              maturinBuildHook
+            ];
+          };
+        in
         pkgs.python3.pkgs.buildPythonPackage {
           pname = "ret2console";
           version = (builtins.fromTOML (builtins.readFile ./pyproject.toml)).project.version;
@@ -23,6 +47,7 @@
             rich
             httpx
             pillow
+            libwsrx
           ];
           # 测试在 devShell 里用 uv run pytest 跑（本机另有完整测试套件）
           doCheck = false;

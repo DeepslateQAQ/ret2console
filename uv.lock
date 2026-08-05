@@ -89,6 +89,19 @@ wheels = [
 ]
 
 [[package]]
+name = "libwsrx"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8e/53/26169ec4815045d8433ae4ed4fa49a4a222efc2ad116b133f9f0678a1810/libwsrx-0.1.0.tar.gz", hash = "sha256:33665a44fb04975d09c7175798c33ae196ac91c89aa2e3ee57642dc196f9a4b8", size = 36749, upload-time = "2026-08-04T23:38:23.024Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/50/d7/33da00a626af924d2f01296f1ae018858efb5109dadf7017f0026ea8da58/libwsrx-0.1.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:b76eee4e39cbffc339b8daa20b2b04c9cade1d472fa96c37d7e3ba2baa0d1475", size = 1522260, upload-time = "2026-08-04T23:38:15.455Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/6d/5aba946b9188ca32b9856f1741e8e1b0e54823b5eb17830e456a4305d969/libwsrx-0.1.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:b7a59f4bec581fa3d4506475f6745649f7bdf6299871487bf36576c1b2bd4c34", size = 1478265, upload-time = "2026-08-04T23:38:17.052Z" },
+    { url = "https://files.pythonhosted.org/packages/80/7f/e02c83968e281c8e2bdc06650b3ed47c3ab12ae13334280f5f442ba7bf5d/libwsrx-0.1.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:66b2725528e4df8aca70c5f5677653ebbf42f66b125c426ad2e5e1b63239ec31", size = 1683394, upload-time = "2026-08-04T23:38:18.557Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/75/2bcee13790aba549e86fd95b8d6c338fb57587d5d17358001d55f58eccfc/libwsrx-0.1.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:4f73e1ec5fc40167b4cc8003b092ceb96eea27aed120c166e5d2ce22ec71044e", size = 1655885, upload-time = "2026-08-04T23:38:19.951Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/43/c96e8d6b985640ea1db78d4cdf825422b92e499058da539ba7f2385a2c09/libwsrx-0.1.0-cp39-abi3-win_amd64.whl", hash = "sha256:e38bafe5fcb3429cb86f303c9d0ccb4869627e1a38ebe295be671f35a3f0b091", size = 1367413, upload-time = "2026-08-04T23:38:21.472Z" },
+]
+
+[[package]]
 name = "markdown-it-py"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -274,6 +287,7 @@ version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "libwsrx" },
     { name = "pillow" },
     { name = "prompt-toolkit" },
     { name = "rich" },
@@ -292,6 +306,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "libwsrx", specifier = ">=0.1.0" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.43" },
     { name = "rich", specifier = ">=13.7" },

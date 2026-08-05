@@ -69,6 +69,7 @@ $nuitkaArgs = @(
     "--no-deployment-flag=self-execution",
     "--output-filename=ret2console.exe",
     "--include-package=ret2console",
+    "--include-module=libwsrx",
     "--include-package=prompt_toolkit",
     "--include-package=rich",
     "--include-package=httpx",

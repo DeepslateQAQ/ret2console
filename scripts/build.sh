@@ -55,6 +55,7 @@ echo "→ Nuitka onefile 构建（约 3-5 分钟）..."
     --no-deployment-flag=self-execution \
     --output-filename=ret2console \
     --include-package=ret2console \
+    --include-module=libwsrx \
     --include-package=prompt_toolkit \
     --include-package=rich \
     --include-package=httpx \
