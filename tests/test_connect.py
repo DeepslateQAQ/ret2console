@@ -43,6 +43,22 @@ class InstanceBackend:
         return httpx.Response(404, json={"message": f"unexpected {request.method} {path}"})
 
 
+class PollingInstanceBackend:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.get_count = 0
+
+    def handler(self, request):
+        path = request.url.path
+        if request.method == "POST" and path == "/api/game/3/challenge/5/instance":
+            return httpx.Response(200, content=b"")
+        if request.method == "GET" and path == "/api/game/3/instance":
+            response = self.responses[min(self.get_count, len(self.responses) - 1)]
+            self.get_count += 1
+            return httpx.Response(200, json=response)
+        return httpx.Response(404, json={"message": f"unexpected {request.method} {path}"})
+
+
 class FakeEndpoint:
     def __init__(self, local, remote):
         self.local_addr = local
@@ -126,3 +142,45 @@ async def test_multi_port_failure_rolls_back_new_endpoints(monkeypatch):
 async def test_start_ok_with_empty_body():
     app = _app(InstanceBackend())
     assert await dispatch(app, "challenge start") == 0
+
+
+
+@pytest.mark.asyncio
+async def test_start_waits_until_instance_is_connectable(monkeypatch, capsys):
+    async def no_sleep(_):
+        pass
+
+    monkeypatch.setattr("ret2console.commands.challenge.asyncio.sleep", no_sleep)
+    backend = PollingInstanceBackend([
+        [],
+        [{**_instance(), "state": "Pending"}],
+        [_instance()],
+    ])
+    app = _app(backend)
+
+    assert await dispatch(app, "challenge start") == 0
+    output = capsys.readouterr().out
+    assert backend.get_count == 3
+    assert "等待实例创建" in output
+    assert "Pending" in output
+    assert "实例连接成功" in output
+    assert "ports: 8000" in output
+
+
+@pytest.mark.asyncio
+async def test_start_returns_error_when_instance_fails(monkeypatch, capsys):
+    async def no_sleep(_):
+        pass
+
+    monkeypatch.setattr("ret2console.commands.challenge.asyncio.sleep", no_sleep)
+    backend = PollingInstanceBackend([
+        [{"state": "Pending", "challenge_id": 5}],
+        [{"state": "Failed", "challenge_id": 5}],
+    ])
+    app = _app(backend)
+
+    assert await dispatch(app, "challenge start") == 1
+    output = capsys.readouterr().out
+    assert backend.get_count == 2
+    assert "Pending" in output
+    assert "实例启动失败，状态: Failed" in output

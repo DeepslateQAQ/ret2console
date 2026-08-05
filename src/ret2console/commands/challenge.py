@@ -1,6 +1,8 @@
 """题目命令：challenge list/show/hint/unlock/start/instance/connect/disconnect/stop/renew。"""
 
 from __future__ import annotations
+import asyncio
+
 
 from ret2console.output import make_table
 
@@ -9,6 +11,31 @@ from ret2console.commands import Command, register
 from ret2console.output import console, format_ts, render_markdown
 from ret2console.state import App
 from ret2console.wsrx import tunnel_status, wsrx_link
+
+INSTANCE_POLL_INTERVAL = 1.0
+_INSTANCE_FAILURE_STATES = {"error", "failed", "failure", "terminated", "crashloopbackoff"}
+
+
+async def _wait_for_instance(app: App, gid: int, cid: int) -> dict | None:
+    """Poll until the requested instance is running and exposes a connection, or fails."""
+    last_state: str | None = None
+    while True:
+        try:
+            items = await _get_instances(app, gid, cid)
+        except ApiError as e:
+            console.print(f"[red]✗ 实例状态查询失败: {e.message}[/red]")
+            return None
+        inst = next(iter(items), None)
+        state = str(inst.get("state") or "等待实例创建") if inst else "等待实例创建"
+        if state != last_state:
+            console.print(f"[yellow]➜[/yellow] 实例状态: [bold]{state}[/bold]")
+            last_state = state
+        if inst and state.lower() == "running" and inst.get("traffic"):
+            return inst
+        if state.lower() in _INSTANCE_FAILURE_STATES:
+            console.print(f"[red]✗ 实例启动失败，状态: {state}[/red]")
+            return None
+        await asyncio.sleep(INSTANCE_POLL_INTERVAL)
 
 
 async def _get_instances(app: App, gid: int, cid: int | None) -> list[dict]:
@@ -220,7 +247,13 @@ async def cmd_challenge_start(app: App, args: list[str]) -> int:
         if "one instance" in msg or "already launched" in msg:
             console.print("[yellow]! 提示：challenge instance 查看运行中的实例；challenge stop <题目id> 可关闭实例后重新启动[/yellow]")
         return 1
-    console.print("[yellow]➜ 实例启动请求已提交，稍候 challenge instance 查看状态[/yellow]")
+    console.print("[yellow]➜[/yellow] 实例启动请求已提交，等待连接…")
+    inst = await _wait_for_instance(app, gid, cid)
+    if inst is None:
+        return 1
+    console.print(f"[green]✓[/green] 实例连接成功，状态: [bold]{inst.get('state', '?')}[/bold]")
+    if inst.get("ports"):
+        console.print(f"ports: {', '.join(map(str, inst['ports']))}")
     return 0
 
 
