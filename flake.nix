@@ -14,7 +14,7 @@
       ret2console = pkgs:
         pkgs.python3.pkgs.buildPythonPackage {
           pname = "ret2console";
-          version = "0.1.0";
+          version = (builtins.fromTOML (builtins.readFile ./pyproject.toml)).project.version;
           pyproject = true;
           src = ./.;
           build-system = [ pkgs.python3.pkgs.hatchling ];
