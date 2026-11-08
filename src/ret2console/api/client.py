@@ -28,6 +28,21 @@ def _unwrap_list(data: Any) -> list[Any]:
     return []
 
 
+def split_page(data: Any) -> tuple[list[Any], int | None]:
+    """分页响应 → (items, total)：兼容 `[items, total]`、`{data: [...]}` 与裸数组。"""
+    items = _unwrap_list(data)
+    if (
+        isinstance(data, list)
+        and len(data) == 2
+        and isinstance(data[0], list)
+        and isinstance(data[1], int)
+    ):
+        return items, data[1]
+    if isinstance(data, dict) and isinstance(data.get("total"), int):
+        return items, data["total"]
+    return items, None
+
+
 class ApiError(Exception):
     """携带后端语义的 API 错误。"""
 
@@ -220,6 +235,24 @@ class ApiClient:
     async def profile(self) -> dict[str, Any]:
         return await self.get_json("/account/profile")
 
+    async def update_profile(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """修改资料：PATCH /account/profile（后端成功时可能返回空 body）。"""
+        data = await self.patch_json("/account/profile", json=payload)
+        return data if isinstance(data, dict) else {}
+
+    async def upload_media(self, data: bytes, filename: str) -> dict[str, Any]:
+        """上传媒体（头像等）：POST /media，multipart 字段名 file，返回 {hash, ...}。"""
+        resp = await self._request("POST", "/media", files={"file": (filename, data)})
+        if not resp.content:
+            return {}
+        body = resp.json()
+        return body if isinstance(body, dict) else {}
+
+    async def temporary_code(self) -> dict[str, Any]:
+        """生成临时身份验证码：POST /account/code（5 分钟有效）。"""
+        data = await self.post_json("/account/code", json={})
+        return data if isinstance(data, dict) else {}
+
     async def list_institutes(self) -> list[dict[str, Any]]:
         """机构（归属单位）列表：GET /account/institute，返回 [{id, name, ...}]。
 
@@ -233,8 +266,21 @@ class ApiClient:
     async def list_games(self, page: int = 1, page_size: int = 50) -> list[dict[str, Any]]:
         return await self._paginate("/game", page_size)
 
+    async def list_games_page(
+        self, page: int = 1, page_size: int = 50, host_type: int | None = None,
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        """单页比赛列表：GET /game?page=&page_size=[&host_type=]，返回 (items, total)。"""
+        params: dict[str, Any] = {"page": page, "page_size": page_size}
+        if host_type is not None:
+            params["host_type"] = host_type
+        return split_page(await self.get_json("/game", params=params))
+
     async def get_game(self, game_id: int) -> dict[str, Any]:
         return await self.get_json(f"/game/{game_id}")
+
+    async def download_bytes(self, path: str, params: dict[str, Any] | None = None) -> bytes:
+        """下载原始字节（附件/封面等）：走带 Bearer 的 _request，返回响应体。"""
+        return (await self._request("GET", path, params=params)).content
 
     async def get_game_doc(self, game_id: int, doc_type: str) -> str:
         resp = await self._request("GET", f"/game/{game_id}/doc/{doc_type}")
@@ -296,6 +342,10 @@ class ApiClient:
     async def list_solves(self, game_id: int) -> list[dict[str, Any]]:
         """当前队伍已提交记录（GET /game/{gid}/solve），含 solved/challenge_id。"""
         return _unwrap_list(await self.get_json(f"/game/{game_id}/solve"))
+
+    async def list_submissions(self, game_id: int) -> list[dict[str, Any]]:
+        """当前账号在该比赛的提交记录（GET /game/{gid}/solve，分页兼容）。"""
+        return split_page(await self.get_json(f"/game/{game_id}/solve"))[0]
 
     # ---- 提交 ----
 
