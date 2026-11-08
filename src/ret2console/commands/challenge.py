@@ -4,11 +4,15 @@ from __future__ import annotations
 import asyncio
 
 
+from typing import Any
+
 from ret2console.output import make_table
 
+from ret2console import service
 from ret2console.api.client import ApiError
-from ret2console.commands import Command, register
+from ret2console.commands import Command, register, report_service_error
 from ret2console.output import console, format_ts, render_markdown
+from ret2console.service import ServiceError
 from ret2console.state import App
 from ret2console.wsrx import tunnel_status, wsrx_link
 
@@ -131,6 +135,68 @@ async def cmd_challenge_show(app: App, args: list[str]) -> int:
     return 0
 
 
+async def _context_ids(app: App, ref: str | None) -> tuple[int, int]:
+    """题目上下文解析：需要比赛上下文 + 名称/前缀/id 解析。"""
+    gid = app.ctx.game_id
+    if gid is None:
+        raise ServiceError("未指定比赛（先 contest use <比赛>）", code="no_game")
+    cid = await service.resolve_challenge(app, gid, ref)
+    return gid, cid
+
+
+def _format_remaining(seconds: Any) -> str:
+    total = max(0, int(seconds))
+    minutes, secs = divmod(total, 60)
+    return f"{minutes} 分 {secs} 秒"
+
+
+async def cmd_challenge_files(app: App, args: list[str]) -> int:
+    """列出题目附件（folder/file）。"""
+    ref = " ".join(args).strip() or None
+    try:
+        gid, cid = await _context_ids(app, ref)
+        items = await service.list_files(app, gid, cid)
+    except ServiceError as e:
+        return report_service_error(e)
+    if not items:
+        console.print("（无附件）")
+        return 0
+    table = make_table(title=f"题目 {cid} 附件")
+    table.add_column("目录", style="dim")
+    table.add_column("文件")
+    for item in items:
+        table.add_row(item["folder"] or "—", item["file"])
+    console.print(table)
+    return 0
+
+
+async def cmd_challenge_solve(app: App, args: list[str]) -> int:
+    """解题状态：GET .../submit 返回 {solved, solves}。"""
+    ref = " ".join(args).strip() or None
+    try:
+        gid, cid = await _context_ids(app, ref)
+        data = await app.api.get_json(f"/game/{gid}/challenge/{cid}/submit")
+    except ServiceError as e:
+        return report_service_error(e)
+    except ApiError as e:
+        console.print(f"[red]✗ {e.message}[/red]")
+        return 1
+    payload = data if isinstance(data, dict) else {}
+    solves = payload.get("solves")
+    if isinstance(solves, list):
+        count: int | None = len(solves)
+    elif isinstance(solves, int):
+        count = solves
+    else:
+        count = None
+    suffix = f"（{count} 次提交）" if count is not None else ""
+    if payload.get("solved"):
+        console.print(f"[bold green]✓ 已解出{suffix}[/bold green]")
+    else:
+        console.print(f"[bold red]✗ 未解出{suffix}[/bold red]")
+    return 0
+
+
 async def cmd_challenge_instance(app: App, args: list[str]) -> int:
     gid = app.ctx.game_id
     cid = app.ctx.challenge_id
@@ -140,11 +206,10 @@ async def cmd_challenge_instance(app: App, args: list[str]) -> int:
         console.print("[yellow]! 请先进入比赛上下文：cd /contests/<id> 或 contest use <id>[/yellow]")
         return 1
     try:
-        items = await _get_instances(app, gid, cid)
-    except ApiError as e:
-        console.print(f"[red]✗ {e.message}[/red]")
-        return 1
-    if not items or (len(items) == 1 and not items[0]):
+        items = await service.list_instances(app, gid, cid)
+    except ServiceError as e:
+        return report_service_error(e)
+    if not items:
         console.print("（无运行中的实例，challenge start <id> 启动）")
         return 0
     for inst in items:
@@ -154,7 +219,9 @@ async def cmd_challenge_instance(app: App, args: list[str]) -> int:
             console.print(f"tunnel: {tunnel_status(app.wsrx, str(inst['traffic']))}")
         if inst.get("ports"):
             console.print(f"ports: {', '.join(map(str, inst['ports']))}")
-        console.print(f"renew: {inst.get('renew_count', 0)}  created: {format_ts(inst.get('created_at', ''))}")
+        remaining = inst.get("remaining_seconds")
+        console.print(f"renew: {inst.get('renew_count', 0)}  created: {format_ts(inst.get('created_at', ''))}"
+                      + (f"  剩余: {_format_remaining(remaining)}" if remaining is not None else ""))
     return 0
 
 
@@ -295,6 +362,13 @@ async def cmd_challenge_renew(app: App, args: list[str]) -> int:
         console.print("[yellow]! 请先进入题目上下文[/yellow]")
         return 1
     try:
+        instances = await service.list_instances(app, gid, cid)
+    except ServiceError:
+        instances = []
+    if not instances:
+        console.print("[yellow]! 实例未运行，无需续期[/yellow]")
+        return 0
+    try:
         await app.api.patch_json(f"/game/{gid}/challenge/{cid}/instance", json={})
     except ApiError as e:
         console.print(f"[red]✗ {e.message}[/red]")
@@ -355,7 +429,7 @@ async def cmd_challenge_unlock(app: App, args: list[str]) -> int:
 
 
 def register_challenge() -> None:
-    register(Command("challenge", _challenge_dispatch, usage="challenge <list|show|hint|unlock|start|instance|connect|disconnect|stop|renew> ...", description="题目操作（需比赛上下文）", category="题目"))
+    register(Command("challenge", _challenge_dispatch, usage="challenge <list|show|hint|unlock|files|solve|start|instance|connect|disconnect|stop|renew> ...", description="题目操作（需比赛上下文）", category="题目"))
 
 
 async def _challenge_dispatch(app: App, args: list[str]) -> int:
@@ -365,6 +439,8 @@ async def _challenge_dispatch(app: App, args: list[str]) -> int:
         "show": cmd_challenge_show,
         "hint": cmd_challenge_hint,
         "unlock": cmd_challenge_unlock,
+        "files": cmd_challenge_files,
+        "solve": cmd_challenge_solve,
         "start": cmd_challenge_start,
         "instance": cmd_challenge_instance,
         "connect": cmd_challenge_connect,
@@ -374,7 +450,7 @@ async def _challenge_dispatch(app: App, args: list[str]) -> int:
     }
     handler = table.get(sub)
     if handler is None:
-        console.print(f"[red]✗ 未知 challenge 子命令: {sub}（可用: list/show/hint/unlock/start/instance/connect/disconnect/stop/renew）[/red]")
+        console.print(f"[red]✗ 未知 challenge 子命令: {sub}（可用: list/show/hint/unlock/files/solve/start/instance/connect/disconnect/stop/renew）[/red]")
         return 1
     return await handler(app, args[1:])
 

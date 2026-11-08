@@ -1,5 +1,7 @@
 """cat / download(wget) 命令测试。"""
 
+from pathlib import Path
+
 import httpx
 import pytest
 
@@ -125,3 +127,116 @@ def test_registry_aliases():
     assert get_command("cat") is not None
     assert get_command("wget") is not None
     assert get_command("download") is not None
+
+
+class BatchBackend:
+    """附件列表 + 内容回显（`folder|file`），用于批量下载与路径安全测试。"""
+
+    def __init__(self, files: list[tuple[str, str]], title: str = "Hello World") -> None:
+        self.files = files
+        self.title = title
+        self.requests: list[dict] = []
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        self.requests.append({"method": request.method, "path": path})
+        if path.endswith("/game/3/challenge/5") and request.method == "GET":
+            return httpx.Response(200, json={"id": 5, "title": self.title})
+        if path.endswith("/game/3/challenge/5/file"):
+            params = request.url.params
+            if "file" in params:
+                body = f"{params.get('folder', '')}|{params['file']}".encode()
+                return httpx.Response(200, content=body)
+            return httpx.Response(200, json=[
+                {"folder": folder, "file": name} for folder, name in self.files
+            ])
+        return httpx.Response(404, json={"message": f"unexpected {request.method} {path}"})
+
+
+def _batch_app(backend: BatchBackend):
+    app = _build_app()
+    app.api._client = httpx.AsyncClient(
+        base_url="http://mock/api", transport=httpx.MockTransport(backend.handler),
+    )
+    app.api.configure(base_url="http://mock/api", token=None)
+    app.ctx.set_game(3)
+    app.ctx.set_challenge(3, 5)
+    return app
+
+
+@pytest.mark.asyncio
+async def test_download_all_preserves_folder_structure(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    backend = BatchBackend([
+        ("static", "a.zip"),
+        ("static", "same.txt"),
+        ("static", "same.txt"),
+        ("", "root.txt"),
+    ])
+    app = _batch_app(backend)
+    assert await dispatch(app, "download") == 0
+    root = tmp_path / "5-Hello-World"
+    assert (root / "static" / "a.zip").read_bytes() == b"static|a.zip"
+    assert (root / "static" / "same.txt").exists()
+    assert (root / "static" / "same (1).txt").exists()  # 同名冲突自动加后缀
+    assert (root / "root.txt").exists()  # 空 folder 不产生额外层级
+    assert not (root / "_").exists()
+    out = capsys.readouterr().out
+    assert "已下载 4 个附件" in out
+
+
+@pytest.mark.asyncio
+async def test_download_all_honours_dir_flag(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    backend = BatchBackend([("static", "a.zip")])
+    app = _batch_app(backend)
+    assert await dispatch(app, "download --dir out") == 0
+    assert (tmp_path / "out" / "5-Hello-World" / "static" / "a.zip").exists()
+
+
+@pytest.mark.asyncio
+async def test_download_single_file_folder_disambiguation(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    backend = BatchBackend([("static", "a.zip"), ("mapped", "a.zip")])
+    app = _batch_app(backend)
+    assert await dispatch(app, "download a.zip") == 1
+    assert "附件名不唯一" in capsys.readouterr().out
+    assert await dispatch(app, "download mapped/a.zip") == 0
+    assert (tmp_path / "a.zip").read_bytes() == b"mapped|a.zip"
+
+
+@pytest.mark.asyncio
+async def test_download_missing_file_lists_available(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    backend = BatchBackend([("static", "a.zip")])
+    app = _batch_app(backend)
+    assert await dispatch(app, "download nope.zip") == 1
+    out = capsys.readouterr().out
+    assert "附件不存在" in out
+    assert "static/a.zip" in out
+
+
+@pytest.mark.asyncio
+async def test_download_sanitizes_traversal_paths(tmp_path, monkeypatch):
+    """`..`/绝对路径只保留末段，不允许写出目标目录。"""
+    from ret2console import service
+
+    monkeypatch.chdir(tmp_path)
+    backend = BatchBackend([("..", "../../evil.txt"), ("static", "/etc/passwd")])
+    app = _batch_app(backend)
+    result = await service.download_files(app, 3, 5, file=None, output_dir=None)
+    root = tmp_path / "5-Hello-World"
+    assert (root / "_" / "evil.txt").exists()
+    assert (root / "static" / "passwd").exists()
+    assert not (tmp_path / "evil.txt").exists()
+    assert result["root"] == str(Path("5-Hello-World"))
+    assert len(result["files"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_download_empty_challenge(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    backend = BatchBackend([])
+    app = _batch_app(backend)
+    assert await dispatch(app, "download") == 0
+    assert "无附件" in capsys.readouterr().out
