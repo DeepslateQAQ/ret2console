@@ -96,7 +96,7 @@ $ r2c mcp setup         # 选择 Agent，打印配置片段（不写入任何文
 Ret2Console 具有 Nix Flakes 支持，你可以直接使用 `nix run` 启动 Ret2Console：
 
 ```bash
-$ nix run github:AstralFlare-owo/ret2console
+$ nix run github:DeepslateQAQ/ret2console
 ```
 
 其余操作方式同上。
