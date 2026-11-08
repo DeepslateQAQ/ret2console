@@ -16,6 +16,7 @@ from ret2console.commands.completion import register_completion
 from ret2console.commands.contest import register_contest
 from ret2console.commands.files import register_files
 from ret2console.commands.man import register_man
+from ret2console.commands.mcp import register_mcp
 from ret2console.commands.scoreboard import register_scoreboard
 from ret2console.commands.shell import register_shell
 from ret2console.commands.submission import register_submission
@@ -33,6 +34,7 @@ USAGE = """ret2console — Ret2Shell 终端接口
   r2c                 进入交互式终端（REPL）
   r2c -c '<命令>'     执行一条命令后退出（; 分隔多条）
   r2c <脚本文件>      执行脚本文件（支持 shebang）
+  r2c mcp serve       启动 MCP stdio 服务（供外部 Agent 接入）
   r2c completion <bash|zsh|fish>  生成 shell 补全脚本
 
 选项:
@@ -58,6 +60,7 @@ def _register_all() -> None:
     register_autoplay()
     register_submission()
     register_completion()
+    register_mcp()
 
 
 def _build_app() -> App:
@@ -106,6 +109,11 @@ async def _run(mode: str, payload: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     _register_all()
+
+    if argv and argv[0] == "mcp":
+        # `r2c mcp serve` 需要在 shell 中直接拉起，先于任何 App/wsrx 初始化
+        from ret2console.mcpserver import cli as mcp_cli
+        return asyncio.run(mcp_cli.main(argv[1:]))
 
     if argv and argv[0] in ("-h", "--help"):
         console.print(USAGE)

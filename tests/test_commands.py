@@ -19,7 +19,10 @@ def test_exit_code_escapes_dispatch():
 
 
 def test_registry_has_core():
-    for name in ["help", "exit", "cd", "ls", "auth", "contest", "challenge", "submit", "scoreboard"]:
+    for name in [
+        "help", "exit", "cd", "ls", "auth", "contest", "challenge", "submit", "scoreboard",
+        "submissions", "completion", "mcp",
+    ]:
         assert get_command(name) is not None, name
 
 

@@ -66,11 +66,12 @@ class Config:
     path: Path | None = field(default=None, repr=False, compare=False)  # 全局配置存储路径
 
     @classmethod
-    def load(cls, path: Path | None = None) -> "Config":
+    def load(cls, path: Path | None = None, *, profile: str | None = None) -> "Config":
         """全局配置 + 当前 profile 的 endpoint 合并加载。
 
         兼容旧版：全局 config.json 里的 api_base/insecure 视为 default
         profile 的迁移数据（profile 级文件存在时优先）。
+        `profile` 仅覆盖本次加载的 active_profile，不写回磁盘（供 --profile 覆盖）。
         """
         _ensure_dirs()
         path = Path(path or LEGACY_DIR / "config.json")
@@ -81,17 +82,17 @@ class Config:
             cfg = {}
         if not isinstance(cfg, dict):
             cfg = {}
-        profile = str(cfg.get("active_profile") or DEFAULT_PROFILE)
-        if not valid_profile_name(profile):
-            profile = DEFAULT_PROFILE
+        active = str(profile or cfg.get("active_profile") or DEFAULT_PROFILE)
+        if not valid_profile_name(active):
+            active = DEFAULT_PROFILE
         # 旧版全局 endpoint → default profile 迁移兜底
         legacy_ep = {k: v for k, v in cfg.items() if k in ("api_base", "insecure")}
         ep: dict = {}
         try:
-            ep = json.loads(profile_config_path(profile).read_text(encoding="utf-8"))
+            ep = json.loads(profile_config_path(active).read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError, TypeError):
-            ep = legacy_ep if profile == DEFAULT_PROFILE else {}
-        merged = {**cfg, **ep, "active_profile": profile}
+            ep = legacy_ep if active == DEFAULT_PROFILE else {}
+        merged = {**cfg, **ep, "active_profile": active}
         conf = cls(**{k: v for k, v in merged.items() if k in cls.__dataclass_fields__})
         conf.path = path
         return conf

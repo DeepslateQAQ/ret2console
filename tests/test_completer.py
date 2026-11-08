@@ -228,6 +228,27 @@ def test_two_level_command_still_completes():
     assert "login" not in [c.text for c in comp.get_completions(Document("auth profile "), None)]
 
 
+def test_new_subcommands_are_completed():
+    """auth show/edit/code/ping、challenge files/solve、mcp 全子命令均进入补全表。"""
+    from ret2console.repl import _command_table
+    table = _command_table()
+    for name in ("show", "edit", "code", "ping"):
+        assert name in table["auth"]
+    for name in ("files", "solve"):
+        assert name in table["challenge"]
+    assert table["mcp"] == ["serve", "tools", "setup", "status"]
+    comp = Ret2ConsoleCompleter(
+        commands=lambda: table,
+        vfs=_build_vfs(),
+        dynamic_candidates=lambda _c, _b, _w: [],
+    )
+    for line, expected in (
+        ("auth ", "show"), ("challenge ", "files"), ("mcp ", "serve"),
+    ):
+        texts = [c.text for c in comp.get_completions(Document(line), None)]
+        assert expected in texts, line
+
+
 def test_complete_after_path_with_space_uses_cwd():
     """cd contests/ 空格后 Tab：从当前目录补新路径，而不是继承 contests/ 前缀。"""
     vfs = _build_vfs()
