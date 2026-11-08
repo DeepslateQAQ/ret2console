@@ -166,3 +166,85 @@ async def test_team_leave():
     assert backend.requests[-1]["path"] == "/api/game/3/team/self"
     # 已退出再 leave → 提示未加入
     assert await dispatch(app, "team leave") == 1
+
+
+class RulesBackend(TeamBackend):
+    """在 TeamBackend 基础上让 doc/rules 可用（触发参赛规则确认）。"""
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/doc/rules"):
+            self.requests.append({"method": request.method, "path": request.url.path, "body": ""})
+            return httpx.Response(200, json="# 参赛规则\n\n禁止作弊")
+        return super().handler(request)
+
+
+def _team_writes(backend: TeamBackend) -> list[dict]:
+    return [r for r in backend.requests if r["method"] in ("POST", "PATCH", "DELETE")]
+
+
+@pytest.mark.asyncio
+async def test_team_create_shows_rules_and_requires_yes(capsys):
+    backend = RulesBackend()
+    app = _app_with_backend(backend)
+    app.ctx.set_game(3)
+    assert await dispatch(app, "team create 星尘") == 1
+    out = capsys.readouterr().out
+    assert "禁止作弊" in out
+    assert "需要 --yes" in out
+    assert _team_writes(backend) == []
+
+
+@pytest.mark.asyncio
+async def test_team_create_with_yes_skips_confirm(capsys):
+    backend = RulesBackend()
+    app = _app_with_backend(backend)
+    app.ctx.set_game(3)
+    assert await dispatch(app, "team create 星尘 --yes") == 0
+    assert [r["method"] for r in _team_writes(backend)] == ["POST"]
+    assert "禁止作弊" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_team_join_with_yes():
+    backend = RulesBackend()
+    app = _app_with_backend(backend)
+    app.ctx.set_game(3)
+    assert await dispatch(app, "team join tok --yes") == 0
+    assert [r["method"] for r in _team_writes(backend)] == ["PATCH"]
+
+
+@pytest.mark.asyncio
+async def test_team_create_tty_confirm_cancel(monkeypatch):
+    from ret2console.commands import team as team_mod
+
+    backend = RulesBackend()
+    app = _app_with_backend(backend)
+    app.ctx.set_game(3)
+    monkeypatch.setattr(team_mod, "is_tty", lambda: True)
+
+    async def _cancel(_question: str) -> bool:
+        return False
+
+    monkeypatch.setattr(team_mod, "confirm", _cancel)
+    assert await dispatch(app, "team create 星尘") == 0
+    assert _team_writes(backend) == []
+
+
+@pytest.mark.asyncio
+async def test_team_create_tty_confirm_accept(monkeypatch):
+    from ret2console.commands import team as team_mod
+
+    backend = RulesBackend()
+    app = _app_with_backend(backend)
+    app.ctx.set_game(3)
+    monkeypatch.setattr(team_mod, "is_tty", lambda: True)
+    asked: list[str] = []
+
+    async def _accept(question: str) -> bool:
+        asked.append(question)
+        return True
+
+    monkeypatch.setattr(team_mod, "confirm", _accept)
+    assert await dispatch(app, "team create 星尘") == 0
+    assert asked and "创建队伍" in asked[0]
+    assert [r["method"] for r in _team_writes(backend)] == ["POST"]

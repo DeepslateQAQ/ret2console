@@ -4,10 +4,36 @@ from __future__ import annotations
 
 from ret2console.api.client import ApiError
 from ret2console.commands import Command, register
-from ret2console.output import console
+from ret2console.interact import confirm
+from ret2console.output import console, is_tty, render_markdown
 from ret2console.state import App
 
 _TEAM_STATE = {0: "封禁", 1: "待审核", 2: "隐藏", 3: "已通过"}
+
+
+async def _confirm_rules(app: App, gid: int, action: str, *, yes: bool) -> int | None:
+    """展示 doc/rules 并确认（--yes 跳过确认）；返回 None 表示继续执行。"""
+    try:
+        rules = await app.api.get_game_doc(gid, "rules")
+    except ApiError:
+        return None  # 规则文档不可用：跳过展示与确认
+    if not isinstance(rules, str) or not rules.strip():
+        return None
+    console.print(render_markdown(rules))
+    if yes:
+        return None
+    if not is_tty():
+        console.print("[red]✗ 非交互模式需要 --yes[/red]")
+        return 1
+    try:
+        ok = await confirm(f"已阅读参赛规则，{action}？")
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n已取消")
+        return 1
+    if not ok:
+        console.print("[yellow]! 已取消[/yellow]")
+        return 0
+    return None
 
 
 async def _self_team(app: App, gid: int) -> dict | None:
@@ -39,11 +65,19 @@ def _team_id(app: App, args: list[str], team: dict | None) -> int | None:
 
 async def cmd_team_create(app: App, args: list[str]) -> int:
     gid = app.ctx.game_id
-    if not args:
-        console.print("[red]用法: team create <队伍名> [tag][/red]")
+    if gid is None:
+        console.print("[yellow]! 请先进入比赛上下文[/yellow]")
         return 1
-    name = args[0]
-    tag = args[1] if len(args) > 1 else None
+    yes = "--yes" in args or "-y" in args
+    rest = [a for a in args if a not in ("--yes", "-y")]
+    if not rest:
+        console.print("[red]用法: team create <队伍名> [tag] [--yes][/red]")
+        return 1
+    name = rest[0]
+    tag = rest[1] if len(rest) > 1 else None
+    blocked = await _confirm_rules(app, gid, "创建队伍", yes=yes)
+    if blocked is not None:
+        return blocked
     try:
         team = await app.api.post_json(f"/game/{gid}/team", json={"name": name, "tag": tag})
     except ApiError as e:
@@ -62,11 +96,19 @@ async def cmd_team_create(app: App, args: list[str]) -> int:
 
 async def cmd_team_join(app: App, args: list[str]) -> int:
     gid = app.ctx.game_id
-    if not args:
-        console.print("[red]用法: team join <邀请token>[/red]")
+    if gid is None:
+        console.print("[yellow]! 请先进入比赛上下文[/yellow]")
         return 1
+    yes = "--yes" in args or "-y" in args
+    rest = [a for a in args if a not in ("--yes", "-y")]
+    if not rest:
+        console.print("[red]用法: team join <邀请token> [--yes][/red]")
+        return 1
+    blocked = await _confirm_rules(app, gid, "加入队伍", yes=yes)
+    if blocked is not None:
+        return blocked
     try:
-        team = await app.api.patch_json(f"/game/{gid}/team", json={"token": args[0]})
+        team = await app.api.patch_json(f"/game/{gid}/team", json={"token": rest[0]})
     except ApiError as e:
         console.print(f"[red]✗ 加入失败: {e.message}[/red]")
         return 1
