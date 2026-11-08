@@ -12,11 +12,13 @@ from ret2console.commands.auth import register_auth
 from ret2console.commands.autoplay import register_autoplay
 from ret2console.commands.basic import register_basic
 from ret2console.commands.challenge import register_challenge
+from ret2console.commands.completion import register_completion
 from ret2console.commands.contest import register_contest
 from ret2console.commands.files import register_files
 from ret2console.commands.man import register_man
 from ret2console.commands.scoreboard import register_scoreboard
 from ret2console.commands.shell import register_shell
+from ret2console.commands.submission import register_submission
 from ret2console.commands.submit import register_submit
 from ret2console.commands.team import register_team
 from ret2console.output import console, is_tty
@@ -31,6 +33,7 @@ USAGE = """ret2console — Ret2Shell 终端接口
   r2c                 进入交互式终端（REPL）
   r2c -c '<命令>'     执行一条命令后退出（; 分隔多条）
   r2c <脚本文件>      执行脚本文件（支持 shebang）
+  r2c completion <bash|zsh|fish>  生成 shell 补全脚本
 
 选项:
   -c <命令>   执行命令后退出
@@ -53,6 +56,8 @@ def _register_all() -> None:
     register_team()
     register_shell()
     register_autoplay()
+    register_submission()
+    register_completion()
 
 
 def _build_app() -> App:
