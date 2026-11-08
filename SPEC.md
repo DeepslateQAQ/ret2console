@@ -309,7 +309,6 @@ ret2console 直接依赖 Python 包 `libwsrx`，不检测或下载 `wsrx` CLI，
 13. ✅ MCP stdio 服务：dual-era 协议（2025-11-25 `initialize` + 2026-07-28 `_meta`）、33 个选手侧工具、`r2c mcp setup` 配置片段（§19）
 
 ### 已知待办
-- wsrx-desktop 模式实测（本机无 desktop，CLI 模式已实测）
 - 子 shell 三种 shell 的真实环境冒烟（本机仅 zsh 可用）
 - MCP 现代协议（2026-07-28 `server/discover`）尚无真实客户端实测，当前以单元测试 + stdio 烟测覆盖
 
