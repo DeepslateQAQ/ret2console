@@ -254,11 +254,12 @@ def _command_table() -> dict[str, list[str]]:
 
 
 _SUBCOMMANDS: dict[str, list[str]] = {
-    "auth": ["login", "logout", "register", "status", "endpoint", "profile"],
+    "auth": ["login", "logout", "register", "status", "endpoint", "profile", "show", "edit", "code", "ping"],
     "auth profile": ["list", "create", "use", "delete", "status"],
     "contest": ["list", "show", "use", "doc", "notice"],
-    "challenge": ["list", "show", "hint", "unlock", "start", "instance", "connect", "disconnect", "stop", "renew"],
+    "challenge": ["list", "show", "hint", "unlock", "files", "solve", "start", "instance", "connect", "disconnect", "stop", "renew"],
     "team": ["create", "join", "modify", "info", "rank", "member", "solve", "leave"],
+    "mcp": ["serve", "tools", "setup", "status"],
     "admin": ["bulletin", "user", "game", "challenge", "platform", "cluster"],
     "admin bulletin": ["list", "show", "create", "update", "delete"],
     "admin user": ["list", "show", "update", "delete", "ip"],

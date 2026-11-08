@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
 from ret2console.output import make_table
 
+from ret2console import service
 from ret2console.api.client import ApiError
-from ret2console.commands import Command, register
+from ret2console.commands import Command, register, report_service_error
 from ret2console.config import (
     DEFAULT_API_BASE,
     DEFAULT_PROFILE,
@@ -20,9 +27,11 @@ from ret2console.config import (
     profile_session_path,
     valid_profile_name,
 )
-from ret2console.interact import ask
-from ret2console.output import console
+from ret2console.interact import ask, confirm
+from ret2console.output import console, format_ts, is_tty, render_markdown
+from ret2console.service import ServiceError
 from ret2console.state import App
+from ret2console.termimg import show_image
 
 
 async def cmd_auth_login(app: App, args: list[str]) -> int:
@@ -246,13 +255,216 @@ async def cmd_auth_profile(app: App, args: list[str]) -> int:
     return 1
 
 
+def _render_account_table(profile: dict) -> None:
+    table = make_table(show_header=False)
+    table.add_column("字段", style="dim", width=10)
+    table.add_column("值")
+    table.add_row("账号", str(profile.get("account") or "—"))
+    table.add_row("昵称", str(profile.get("nickname") or "—"))
+    table.add_row("邮箱", str(profile.get("email") or "—"))
+    table.add_row("头像", str(profile.get("avatar") or "—"))
+    table.add_row(
+        "机构 ID",
+        str(profile.get("institute_id")) if profile.get("institute_id") is not None else "—",
+    )
+    registered = profile.get("registered_at")
+    table.add_row("注册时间", format_ts(registered) if registered else "—")
+    description = profile.get("description") or ""
+    table.add_row("简介", description.splitlines()[0] if description else "—")
+    console.print(table)
+
+
+async def cmd_auth_show(app: App, args: list[str]) -> int:
+    """显示账号资料（头像在支持终端图片时附带渲染）。"""
+    try:
+        profile = await service.get_account(app)
+    except ServiceError as e:
+        return report_service_error(e)
+    _render_account_table(profile)
+    description = profile.get("description") or ""
+    if description:
+        console.print()
+        console.print(render_markdown(description))
+    avatar = profile.get("avatar")
+    if avatar and app.graphics:
+        try:
+            data = await app.api.download_bytes("/media", params={"hash": avatar})
+            if data:
+                show_image(data, app.graphics, console.width)
+        except Exception:
+            pass  # 头像渲染失败静默跳过（保留 hash 文本）
+    return 0
+
+
+async def _edit_description(app: App) -> str | None:
+    """TTY 无参：用 $VISUAL/$EDITOR 编辑当前简介，返回新内容（取消/失败返回 None）。"""
+    try:
+        profile = await service.get_account(app)
+    except ServiceError as e:
+        report_service_error(e)
+        return None
+    fd, path = tempfile.mkstemp(suffix=".md")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(profile.get("description") or "")
+        editor = (
+            os.environ.get("VISUAL")
+            or os.environ.get("EDITOR")
+            or ("notepad" if sys.platform == "win32" else "vi")
+        )
+        code = subprocess.run([*shlex.split(editor), path]).returncode
+        if code != 0:
+            console.print(f"[red]✗ 编辑器退出码 {code}[/red]")
+            return None
+        text = Path(path).read_text(encoding="utf-8")
+    finally:
+        Path(path).unlink(missing_ok=True)
+    console.print(render_markdown(text) if text else "[dim]（简介为空）[/dim]")
+    return text
+
+
+def _parse_edit_args(args: list[str]) -> tuple[dict, str | None]:
+    options: dict = {
+        "description": None, "file": None, "avatar": None,
+        "remove_avatar": False, "yes": False,
+    }
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("--description", "--file", "--avatar"):
+            if i + 1 >= len(args):
+                return options, f"{arg} 需要参数"
+            i += 1
+            options[arg.lstrip("-")] = args[i]
+        elif arg.startswith("--description="):
+            options["description"] = arg.split("=", 1)[1]
+        elif arg.startswith("--file="):
+            options["file"] = arg.split("=", 1)[1]
+        elif arg.startswith("--avatar="):
+            options["avatar"] = arg.split("=", 1)[1]
+        elif arg in ("--remove-avatar",):
+            options["remove_avatar"] = True
+        elif arg in ("--yes", "-y"):
+            options["yes"] = True
+        else:
+            return options, f"未知参数: {arg}"
+        i += 1
+    return options, None
+
+
+async def cmd_auth_edit(app: App, args: list[str]) -> int:
+    """修改资料：简介（--description/--file/编辑器）与头像（--avatar/--remove-avatar）。"""
+    options, error = _parse_edit_args(args)
+    if error is not None:
+        console.print(f"[red]✗ {error}[/red]")
+        return 1
+    if options["description"] is not None and options["file"] is not None:
+        console.print("[red]✗ --description 与 --file 不能同时使用[/red]")
+        return 1
+    if options["avatar"] is not None and options["remove_avatar"]:
+        console.print("[red]✗ --avatar 与 --remove-avatar 不能同时使用[/red]")
+        return 1
+
+    description = options["description"]
+    if options["file"] is not None:
+        if options["file"] == "-":
+            description = sys.stdin.read()
+        else:
+            try:
+                description = Path(options["file"]).read_text(encoding="utf-8")
+            except OSError as e:
+                console.print(f"[red]✗ 读取文件失败: {e}[/red]")
+                return 1
+
+    explicit = any((
+        options["description"] is not None, options["file"] is not None,
+        options["avatar"] is not None, options["remove_avatar"],
+    ))
+    if not explicit:
+        if not is_tty():
+            console.print(
+                "[red]✗ auth edit 需要 --description/--file 或 --avatar；非交互模式还需 --yes[/red]"
+            )
+            return 1
+        edited = await _edit_description(app)
+        if edited is None:
+            return 1
+        description = edited
+        explicit = True
+
+    if not is_tty() and not options["yes"]:
+        console.print("[red]✗ 非交互模式需要 --yes[/red]")
+        return 1
+    if is_tty() and not options["yes"]:
+        try:
+            ok = await confirm("提交这些资料修改？")
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n已取消")
+            return 1
+        if not ok:
+            console.print("[yellow]! 已取消[/yellow]")
+            return 0
+    try:
+        await service.update_account(
+            app,
+            description=description,
+            avatar_path=options["avatar"],
+            remove_avatar=options["remove_avatar"],
+        )
+    except ServiceError as e:
+        return report_service_error(e)
+    console.print("[green]✓[/green] 资料已更新")
+    return 0
+
+
+async def cmd_auth_code(app: App, args: list[str]) -> int:
+    """生成临时身份验证码（5 分钟有效，任何持有者可访问你的身份）。"""
+    yes = "--yes" in args or "-y" in args
+    if not is_tty() and not yes:
+        console.print("[red]✗ 非交互模式需要 --yes[/red]")
+        return 1
+    if is_tty() and not yes:
+        try:
+            ok = await confirm("生成临时身份验证码？任何持有者可在 5 分钟内访问你的身份。")
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n已取消")
+            return 1
+        if not ok:
+            console.print("[yellow]! 已取消[/yellow]")
+            return 0
+    try:
+        data = await service.make_code(app)
+    except ServiceError as e:
+        return report_service_error(e)
+    table = make_table(show_header=False)
+    table.add_column("字段", style="dim", width=10)
+    table.add_column("值")
+    table.add_row("Code", data.get("code") or "—")
+    expires = data.get("expires_at")
+    table.add_row("Expires", format_ts(expires) if expires else "—")
+    console.print(table)
+    return 0
+
+
+async def cmd_auth_ping(app: App, args: list[str]) -> int:
+    """验证会话是否仍有效并输出往返延迟。"""
+    try:
+        result = await service.ping(app)
+    except ServiceError as e:
+        return report_service_error(e)
+    console.print("[bold green]✓[/bold green] 会话有效")
+    console.print(f"延迟: {result['latency_ms']} ms")
+    return 0
+
+
 def register_auth() -> None:
     from ret2console.commands import REGISTRY
     if "auth" in REGISTRY:
         return
     register(
         Command(
-            "auth", _auth_dispatch, usage="auth <login|logout|register|status|endpoint|profile> ...",
+            "auth", _auth_dispatch,
+            usage="auth <login|logout|register|status|endpoint|profile|show|edit|code|ping> ...",
             description="认证管理（PoW 验证码自动求解）", category="认证",
         )
     )
@@ -267,9 +479,16 @@ async def _auth_dispatch(app: App, args: list[str]) -> int:
         "status": cmd_auth_status,
         "endpoint": cmd_auth_endpoint,
         "profile": cmd_auth_profile,
+        "show": cmd_auth_show,
+        "edit": cmd_auth_edit,
+        "code": cmd_auth_code,
+        "ping": cmd_auth_ping,
     }
     handler = table.get(sub)
     if handler is None:
-        console.print(f"[red]✗ 未知 auth 子命令: {sub}（可用: login/logout/register/status/endpoint/profile）[/red]")
+        console.print(
+            f"[red]✗ 未知 auth 子命令: {sub}"
+            "（可用: login/logout/register/status/endpoint/profile/show/edit/code/ping）[/red]"
+        )
         return 1
     return await handler(app, args[1:])
