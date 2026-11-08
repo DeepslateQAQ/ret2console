@@ -35,6 +35,16 @@ ret2console（简称 r2c）是 ret2shell（回归终端，`github:ret2shell/ret2
 
 脚本模式认证策略：需要认证的命令若无已保存会话 → 报错退出（不交互）；有则直接使用已保存的认证信息。交互式密码输入只属于 REPL。
 
+### 3.4 one-shot（`r2c <命令> ...`）
+
+`r2c` 后第一个参数按以下优先级解析：
+
+1. 现有文件路径 → 脚本模式（保持 shebang 语义）；
+2. 已注册命令（如 `r2c contest list`、`r2c auth show`）→ 执行单条命令后退出，等价 `r2c -c "<命令>"`，但保留 shell 已解析的空格/引号边界；
+3. 否则报「找不到脚本文件」，退出码 127。
+
+`mcp` 为首命令时直接进入 MCP 子命令（见 §19），不构建 App。one-shot 复用与 REPL 相同的 App 生命周期（退出时依次关闭 wsrx 会话与 HTTP 客户端）；`exit` 的 `EXIT_CODE` 映射为 0，`ApiError` 与其他异常打印 `✗` 后返回 1。
+
 ## 4. 认证与验证码
 
 ### 4.1 验证码：PoW（定案）
@@ -133,15 +143,19 @@ ret2shell 为 CLI 提供专用验证码通道，登录/注册一律走 PoW，不
 
 | 分组 | 命令 |
 |---|---|
-| 认证 | `auth login` `auth logout` `auth register` `auth status` `auth endpoint [URL] [--insecure]`（切换 API 地址，清除旧登录态；`reset` 恢复默认） |
-| 比赛 | `contest list` `contest show <id>` `contest use <id>`（= cd）` contest doc <id> <type>` |
-| 队伍 | `team create <name>` `team join <token>` `team modify <name> [tag]` `team info` `team rank` `team member` `team solve` `team leave` |
-| 题目 | `challenge list` `challenge show <id>`（cat）` challenge hint <id>` `challenge unlock <id> <hint_id>` `challenge start <id>` `challenge instance <id>` `challenge renew <id>` |
-| 附件 | `download <题目> <文件>` |
-| 提交 | `submit [flag]` |
-| 排行 | `scoreboard` |
+| 认证 | `auth login` `auth logout` `auth register` `auth status` `auth endpoint [URL] [--insecure]`（切换 API 地址，清除旧登录态；`reset` 恢复默认） `auth profile <list|create|use|delete|status>` `auth show`（资料） `auth edit [--description TEXT/--file PATH/--avatar PATH/--remove-avatar/--yes]` `auth code [--yes]`（临时身份码） `auth ping` |
+| 比赛 | `contest list [--page N] [--page-size N] [--type training\|game]` `contest show [比赛] [--intro\|--rules\|--cover]` `contest use <比赛>`（= cd） `contest doc <比赛> [readme\|training\|rules]` `contest notice [比赛]` `scoreboard [比赛] [--page N] [--page-size N]` |
+| 队伍 | `team create <name> [tag] [--yes]` `team join <token> [--yes]` `team modify <name> [tag]` `team info` `team rank [队伍id]` `team member [队伍id]` `team solve [队伍id]` `team leave` |
+| 题目 | `challenge list` `challenge show <id>`（cat） `challenge hint <id>` `challenge unlock <id> <hint_id>` `challenge files [题目]` `challenge solve [题目]` `challenge start <id>` `challenge instance <id>` `challenge renew <id>` |
+| 附件 | `download [--dir PATH] [题目id] [文件名]`（无文件名 = 全部附件） |
+| 提交 | `submit [flag]` `submissions [比赛]` |
 | 管理 | `admin bulletin <list|show|create|update|delete>` `admin user <list|show|update|delete|ip>` `admin game <list|show|create|update|delete|token|admins|submissions|audit|stats>` `admin challenge <list|show|create|update|delete|publish|unpublish|answer|history|submissions|instances|attach>` `admin platform <stats|logs|config>` `admin cluster <nodes|config|calmdown>` |
-| 系统 | `help` `exit` `clear` `version` `echo` `pwd` `ls` `cd` `status` |
+| MCP | `mcp serve`（stdio，需在 shell 运行）`mcp tools` `mcp setup [--agent claude\|codex\|opencode\|omp] [--profile NAME]` `mcp status` |
+| 系统 | `help` `exit` `clear` `version` `echo` `pwd` `ls` `cd` `status` `completion <bash\|zsh\|fish> [--output PATH] [--force]` |
+
+比赛/题目参数一律支持名称解析：缺省取当前上下文，纯数字按 id，名称先大小写不敏感精确匹配、再唯一前缀匹配；无匹配 `✗ 找不到…`，多匹配 `✗ …名称不唯一` 并附候选表。
+
+`team create` / `team join` 在发请求前展示 `doc/rules`（后端不可用或为空则跳过）并确认；`--yes` 跳过确认，非 TTY 且未传 `--yes` 直接报错。
 
 shell 彩蛋别名：`ls` = `challenge list`、`cat` = `challenge show`（仅限题目上下文内）、`wget` = `download`。公告/通知：`notice`。
 
@@ -160,6 +174,8 @@ shell 彩蛋别名：`ls` = `challenge list`、`cat` = `challenge show`（仅限
 3. 动态数据补全：比赛/题目列表首次拉取后缓存进会话，`challenge show <Tab>` 补题目 id；`ls` 时刷新缓存
 
 补全菜单 zsh 风格：比赛/题目目录与动态 id 右侧同时显示描述（比赛标题/题目标题，来自 API 缓存）。末尾空白后 Tab 视为开始新词（`auth<空格>` 直接补子命令，不替换已输入内容）。
+
+外部 shell 补全：`r2c completion bash|zsh|fish` 生成脚本。命令列表来自注册表（含别名），第二级来自 `_SUBCOMMANDS`；脚本直接写 stdout（不经 Rich，避免 `[` 被解析），`--output PATH` 落盘且默认拒绝覆盖（`--force` 覆盖）。bash 用 `_r2c_completions` + `compgen -W`，zsh 用 `#compdef` + `_describe`/`_values`，fish 用 `complete -c ... -n '__fish_use_subcommand'`。
 
 ## 11. 子 shell 注入
 
@@ -289,7 +305,97 @@ ret2console 直接依赖 Python 包 `libwsrx`，不检测或下载 `wsrx` CLI，
 9. ✅ `autoplay`
 10. 🚧 打磨：README 已补全；`help <命令>` 可用；交互式 register 完成
 11. ✅ `admin` 命令集（bulletin/user/game/challenge/platform/cluster）+ 输出符号约定（✓/➜/✗/!）全量统一
+12. ✅ 功能补齐：`auth show/edit/code/ping`、`submissions`、`challenge files/solve`、附件批量下载、比赛筛选与名称解析、队伍规则确认、shell 补全脚本
+13. ✅ MCP stdio 服务：dual-era 协议（2025-11-25 `initialize` + 2026-07-28 `_meta`）、33 个选手侧工具、`r2c mcp setup` 配置片段（§19）
 
 ### 已知待办
-- `challenge solve`（`GET .../solves` 解题状态）未接入命令
+- wsrx-desktop 模式实测（本机无 desktop，CLI 模式已实测）
 - 子 shell 三种 shell 的真实环境冒烟（本机仅 zsh 可用）
+- MCP 现代协议（2026-07-28 `server/discover`）尚无真实客户端实测，当前以单元测试 + stdio 烟测覆盖
+
+## 18. 数据层与附件下载
+
+新增 `ret2console/service.py`：所有函数只返回 JSON 可序列化数据或抛 `ServiceError(code/message/status/data)`，不打印任何内容。CLI 命令与 MCP 工具共用该层，保证两条入口的数据形状与错误语义一致：
+
+- 名称解析：`resolve_game` / `resolve_challenge` / `resolve_team`（上下文默认 → 数字 id → 精确匹配 → 唯一前缀；多匹配 `ambiguous` 附 `candidates`）。
+- 账号：`get_status` / `get_account` / `ping` / `update_account` / `make_code`。
+- 比赛：`list_contests` / `get_contest` / `get_contest_doc` / `get_contest_notices` / `get_scoreboard`。
+- 题目：`list_challenges` / `get_challenge` / `list_hints` / `unlock_hint` / `list_files` / `download_files` / `submit_flag`。
+- 实例：`list_instances`（附 `expires_at` / `remaining_seconds`）/ `start_instance`（先查后建）/ `stop_instance` / `renew_instance`。
+- 队伍：`team_info` / `team_rank` / `team_members` / `team_solves` / `team_create` / `team_join` / `team_update`（`_KEEP` 哨兵保留 tag）/ `team_leave`。
+- 其他：`list_submissions` / `ls` / `read`。
+
+附件下载规则：单文件目标 `Path(output_dir or ".")/safe(file)`；批量目标 `<output_dir 或配置 download_dir>/<题目id>-<题目名>/<folder>/<file>`（空 folder 不产生层级）；`safe(p)` 只取末段且 `""/./..` 视为 `_`；同名目标追加 ` (1)`、` (2)`…；题目名 slug 保留 `[A-Za-z0-9._-]`、其余替换并折叠 `-`、截断 40。
+
+## 19. MCP 接入
+
+### 19.1 命令与启动
+
+- `r2c mcp serve`：stdio JSON-RPC 服务（stdout 只允许 MCP 报文，`verbose` 日志写 stderr，且只记录方法名/工具名，不记录 arguments）。协议期进程内其他 stdout 写入（Rich console、终端图片转义、意外 print）统一重定向到 stderr，保证协议流纯净。
+- `r2c mcp tools`：列出工具（不加载凭据）。
+- `r2c mcp setup [--agent claude|codex|opencode|omp] [--profile NAME]`：打印接入配置片段，**不写任何文件**；无 `--agent` 时 TTY 走 gh 风格选择器，非 TTY 报错。
+- `r2c mcp status`：显示版本、profile、endpoint、登录态、协议版本与工具数。
+- REPL 内 `mcp serve` 只提示需在 shell 中运行（不阻塞当前会话）。
+
+全局选项（`r2c mcp` 任意位置均可）：`--profile NAME`、`--url URL`、`--token TOKEN`、`--insecure`、`--verbose`；环境变量默认 `R2C_PROFILE` / `R2C_API_BASE` / `R2C_TOKEN`，命令行优先，空字符串视为未设置。
+
+凭据规则：`--url` 覆盖时**不带 profile token**；仅 `--token` 时沿用 profile endpoint；两种覆盖都不把 token 写回会话文件（`Set-Token` 续期同样不落盘）。
+
+### 19.2 协议
+
+纯标准库 dual-era 实现，不新增依赖：
+
+- 传统：`initialize` 握手，支持 `2024-11-05` / `2025-03-26` / `2025-06-18` / `2025-11-25`（未知版本回落 `2025-11-25`）；`tools/list` 返回 `{tools}`；`ping` 返回 `{}`。
+- 现代：请求 `params._meta["io.modelcontextprotocol/protocolVersion"] == "2026-07-28"` 时走无状态分支；`server/discover` 返回 `supportedVersions` / `capabilities` / `instructions` / `ttlMs=60000` / `cacheScope="private"`；所有结果附 `resultType="complete"` 与 `_meta["io.modelcontextprotocol/serverInfo"]`。
+- 不支持的现代版本 → 错误 `-32022`，`data.supported` 列出全部支持版本。
+- 错误码：`-32700` 解析失败、`-32600` 非法请求（含 batch，MCP 不支持 batch）、`-32601` 未知方法、`-32602` 未知工具/参数非法/缺少必填参数。
+- 工具执行失败不升级为 JSON-RPC 错误：返回 `isError: true`，文本为 `{"error": {"code","message","status","data"}}`，不向 stdout 写堆栈。
+- 无 `id` 的通知（`notifications/initialized` / `notifications/cancelled` 等）一律静默。
+
+### 19.3 工具清单（33）
+
+| 工具 | 参数 | 行为 |
+|---|---|---|
+| `r2c_context` | — | 当前 profile/endpoint/登录/权限/比赛/题目/VFS 路径（只读） |
+| `r2c_use_contest` | `game` | 解析并切换比赛上下文 |
+| `r2c_use_challenge` | `challenge`, `game?` | 解析并切换题目上下文 |
+| `r2c_ls` | `path?` | 列虚拟目录 |
+| `r2c_read` | `path` | 读虚拟文件 |
+| `r2c_auth_status` | — | 登录状态（只读） |
+| `r2c_account_show` | — | 账号资料（不含 token） |
+| `r2c_ping` | — | 会话检测 + 延迟 |
+| `r2c_contest_list` | `page?`, `page_size?`, `host_type?` | 分页比赛列表 |
+| `r2c_contest_show` | `game?` | 比赛详情 |
+| `r2c_contest_doc` | `doc`, `game?` | readme/training/rules |
+| `r2c_contest_notice` | `game?` | 比赛通知 |
+| `r2c_scoreboard` | `game?`, `page?`, `page_size?` | 排行榜 |
+| `r2c_challenge_list` | `game?` | 题目列表 |
+| `r2c_challenge_show` | `challenge?`, `game?` | 题面 |
+| `r2c_challenge_hints` | `challenge?`, `game?` | 提示列表 |
+| `r2c_challenge_unlock_hint` | `hint_id`, `challenge?`, `game?` | 解锁提示（写） |
+| `r2c_challenge_files` | `challenge?`, `game?` | 附件列表 |
+| `r2c_challenge_download` | `file?`, `output_dir?`, `challenge?`, `game?` | 单文件/批量下载 |
+| `r2c_challenge_submit` | `flag`, `challenge?`, `game?` | 提交并轮询评测 |
+| `r2c_instance_status` | `challenge?`, `game?` | 实例列表与剩余时间 |
+| `r2c_instance_start` | `challenge?`, `game?` | 启动（已有实例不重复创建） |
+| `r2c_instance_stop` | `challenge?`, `game?` | 停止（destructive） |
+| `r2c_instance_renew` | `challenge?`, `game?` | 续期 |
+| `r2c_team_info` | `game?` | 我的队伍 |
+| `r2c_team_rank` | `team_id?`, `game?` | 队伍排名 |
+| `r2c_team_members` | `team_id?`, `game?` | 成员列表 |
+| `r2c_team_solves` | `team_id?`, `game?` | 队伍解题 |
+| `r2c_team_create` | `name`, `tag?`, `game?` | 创建队伍（返回邀请 token） |
+| `r2c_team_join` | `token`, `game?` | 加入队伍 |
+| `r2c_team_update` | `name`, `tag?`（null 清空）, `game?` | 修改队伍 |
+| `r2c_team_leave` | `game?` | 退出队伍（destructive） |
+| `r2c_submission_list` | `game?` | 提交记录 |
+
+上下文语义：`game` / `challenge` 缺省取当前上下文；显式 `game` 与当前上下文不同时必须同时给 `challenge`（否则 `invalid_context`），避免「比赛 A + 题目 B」的错配。
+
+输出约定：列表类工具返回 `{items, total?}`（`r2c_ls` 返回 `{path, entries}`）；`r2c_team_info` 返回 `{team: dict|null}`；`r2c_team_rank` 返回 `{rank}`；写工具返回对应状态布尔（`started` / `already_started` / `stopped` / `renewed` / `left` 等）。
+
+注解：只读工具 `readOnlyHint=true, openWorldHint=true`；上下文切换 `idempotentHint=true`；写工具 `readOnlyHint=false, destructiveHint=false`；`r2c_instance_stop` / `r2c_team_leave` 标 `destructiveHint=true`。
+
+### 19.4 安全边界
+
+MCP 仅暴露选手侧能力：不含 admin 命令、autoplay、子 shell、账号资料修改/临时身份码/密码操作。工具结果不包含登录 token。`r2c_team_create` / `r2c_team_join` 在 MCP 中不弹确认，描述里要求调用前先用 `r2c_contest_doc` 读取 `rules`。

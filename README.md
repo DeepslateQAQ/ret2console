@@ -69,6 +69,28 @@ $ uv run r2c -c "...; ..."
 ...
 ```
 
+也可以像 GitHub CLI 一样直接执行单条命令（`r2c <命令> ...`，执行后退出）：
+
+```bash
+$ uv run r2c contest list --type game
+$ uv run r2c submissions
+$ uv run r2c auth show
+$ uv run r2c auth edit --description "打 CTF 真开心"
+$ uv run r2c completion bash        # 生成补全脚本（zsh / fish 同理）
+```
+
+### MCP（供 Agent 接入）
+
+Ret2Console 内置 MCP stdio 服务，可被 Claude Code / Codex / OpenCode / omp 等 Agent 直接拉起：
+
+```bash
+$ r2c auth login        # 先登录（MCP 复用当前 profile 的会话）
+$ r2c mcp serve         # stdio 服务，由 Agent 进程拉起
+$ r2c mcp setup         # 选择 Agent，打印配置片段（不写入任何文件）
+```
+
+`r2c mcp serve` 的 stdout 只输出 MCP 报文，可用 `--profile` / `--url` / `--token` 临时覆盖凭据（也可用 `R2C_PROFILE` / `R2C_API_BASE` / `R2C_TOKEN` 环境变量）。`r2c mcp tools` 列出全部工具，`r2c mcp status` 查看服务配置与登录态。MCP 只暴露选手侧能力，不含 admin、autoplay 与子 shell。
+
 ### Nix 用户请看这里
 
 Ret2Console 具有 Nix Flakes 支持，你可以直接使用 `nix run` 启动 Ret2Console：
