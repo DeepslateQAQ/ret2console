@@ -108,4 +108,103 @@ def test_version_banner_links():
     assert "cyan" in str(spans[__version__].style)
     assert "magenta" in str(spans[__codename__].style)
     assert "red" in str(spans["FLAG"].style)
-    assert "underline" in repo_style
+    assert "underline" in repo_style  # 仓库下划线
+
+
+def test_main_runs_command_oneshot(monkeypatch, tmp_path):
+    """`r2c <命令>` 走 one-shot（gh 风格），参数原样传递。"""
+    monkeypatch.chdir(tmp_path)
+    captured = {}
+
+    async def fake_oneshot(argv):
+        captured["argv"] = argv
+        return 0
+
+    monkeypatch.setattr(cli_mod, "_run_oneshot", fake_oneshot)
+    assert cli_mod.main(["help", "--flag"]) == 0
+    assert captured["argv"] == ["help", "--flag"]
+
+
+def test_main_script_file_wins_over_command(monkeypatch, tmp_path):
+    """同名文件优先走脚本模式（保持 shebang 语义）。"""
+    monkeypatch.chdir(tmp_path)
+    script = tmp_path / "help"
+    script.write_text("# 注释\n")
+    captured = {}
+
+    async def fake_run(mode, payload):
+        captured["mode"] = mode
+        captured["payload"] = payload
+        return 0
+
+    monkeypatch.setattr(cli_mod, "_run", fake_run)
+    assert cli_mod.main(["help"]) == 0
+    assert captured["mode"] == "script"
+
+
+def test_main_missing_script_still_127(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert cli_mod.main(["frobnicate"]) == 127
+
+
+def test_main_mcp_intercept(monkeypatch):
+    from ret2console.mcpserver import cli as mcp_cli
+    captured = {}
+
+    async def fake_main(argv):
+        captured["argv"] = argv
+        return 0
+
+    monkeypatch.setattr(mcp_cli, "main", fake_main)
+    assert cli_mod.main(["mcp", "tools"]) == 0
+    assert captured["argv"] == ["tools"]
+
+
+@pytest.mark.asyncio
+async def test_run_oneshot_closes_wsrx_before_api(monkeypatch):
+    events = []
+    app = cli_mod._build_app()
+    app.wsrx = ClosingWsrx(events)
+    app.api = ClosingApi(events)
+    monkeypatch.setattr(cli_mod, "_build_app", lambda: app)
+
+    async def fake_dispatch(_app, _argv):
+        return 0
+
+    monkeypatch.setattr(cli_mod, "dispatch_args", fake_dispatch)
+    assert await cli_mod._run_oneshot(["status"]) == 0
+    assert events == ["wsrx", "api"]
+
+
+@pytest.mark.asyncio
+async def test_run_oneshot_maps_exit_code(monkeypatch):
+    from ret2console.commands import EXIT_CODE
+
+    async def fake_dispatch(app, argv):
+        return EXIT_CODE
+
+    monkeypatch.setattr(cli_mod, "dispatch_args", fake_dispatch)
+    assert await cli_mod._run_oneshot(["exit"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_run_oneshot_api_error(monkeypatch, capsys):
+    from ret2console.api.client import ApiError
+
+    async def fake_dispatch(app, argv):
+        raise ApiError("boom", status=400)
+
+    monkeypatch.setattr(cli_mod, "dispatch_args", fake_dispatch)
+    assert await cli_mod._run_oneshot(["contest", "list"]) == 1
+    assert "boom" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_run_oneshot_unexpected_error(monkeypatch, capsys):
+    async def fake_dispatch(app, argv):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(cli_mod, "dispatch_args", fake_dispatch)
+    assert await cli_mod._run_oneshot(["contest", "list"]) == 1
+    out = capsys.readouterr().out
+    assert "RuntimeError" in out and "kaboom" in out

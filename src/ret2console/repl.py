@@ -161,7 +161,11 @@ def split_commands(line: str) -> list[tuple[str, str]]:
 async def dispatch_single(app: App, line: str) -> int:
     if line.lstrip().startswith("#"):
         return 0  # 注释（脚本模式语义同样适用于 REPL）
-    args = split_line(line)
+    return await dispatch_args(app, split_line(line))
+
+
+async def dispatch_args(app: App, args: list[str]) -> int:
+    """按已分词参数分发一条命令（REPL 与 one-shot 入口共用，保留引号/空格边界）。"""
     if not args:
         return 0
     cmd = get_command(args[0])

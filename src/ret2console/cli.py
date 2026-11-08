@@ -6,7 +6,8 @@ import asyncio
 import sys
 from pathlib import Path
 
-from ret2console.commands import EXIT_CODE
+from ret2console.api.client import ApiError
+from ret2console.commands import EXIT_CODE, get_command
 from ret2console.commands.admin import register_admin
 from ret2console.commands.auth import register_auth
 from ret2console.commands.autoplay import register_autoplay
@@ -23,7 +24,7 @@ from ret2console.commands.submission import register_submission
 from ret2console.commands.submit import register_submit
 from ret2console.commands.team import register_team
 from ret2console.output import console, is_tty
-from ret2console.repl import dispatch, run_repl
+from ret2console.repl import dispatch, dispatch_args, run_repl
 from ret2console.state import App
 from ret2console.termimg import detect_protocol
 from ret2console.vfs_builder import build_vfs
@@ -32,6 +33,7 @@ USAGE = """ret2console — Ret2Shell 终端接口
 
 用法:
   r2c                 进入交互式终端（REPL）
+  r2c <命令> ...      执行单条命令后退出（等价 r2c -c "<命令>"）
   r2c -c '<命令>'     执行一条命令后退出（; 分隔多条）
   r2c <脚本文件>      执行脚本文件（支持 shebang）
   r2c mcp serve       启动 MCP stdio 服务（供外部 Agent 接入）
@@ -106,6 +108,25 @@ async def _run(mode: str, payload: list[str]) -> int:
         await app.api.close()
 
 
+async def _run_oneshot(argv: list[str]) -> int:
+    """`r2c <命令> ...`：执行单条命令后退出（gh 风格）。"""
+    app = _build_app()
+    try:
+        app.graphics = detect_protocol()
+        try:
+            code = await dispatch_args(app, argv)
+        except ApiError as e:
+            console.print(f"[red]✗ {e.message}[/red]")
+            return 1
+        except Exception as e:  # 命令异常不抛出 traceback
+            console.print(f"[red]✗ 命令执行出错: {type(e).__name__}: {e}[/red]")
+            return 1
+        return 0 if code == EXIT_CODE else code
+    finally:
+        await app.wsrx.close()
+        await app.api.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     _register_all()
@@ -129,13 +150,15 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run("script", _split_commands(script)))
 
     if argv and not argv[0].startswith("-"):
-        # shebang / 脚本文件模式
+        # shebang / 脚本文件模式优先于命令（保持既有脚本语义）
         script_path = Path(argv[0])
-        if not script_path.is_file():
-            console.print(f"[red]✗ 找不到脚本文件: {script_path}[/red]")
-            return 127
-        lines = script_path.read_text(encoding="utf-8").splitlines()
-        return asyncio.run(_run("script", lines))
+        if script_path.is_file():
+            lines = script_path.read_text(encoding="utf-8").splitlines()
+            return asyncio.run(_run("script", lines))
+        if get_command(argv[0]) is not None:
+            return asyncio.run(_run_oneshot(argv))
+        console.print(f"[red]✗ 找不到脚本文件: {script_path}[/red]")
+        return 127
 
     # REPL
     return asyncio.run(_run("repl", []))
