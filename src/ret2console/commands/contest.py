@@ -1,16 +1,18 @@
-"""比赛命令：contest list/show/use/doc/notice。"""
+"""比赛命令：contest list/show/use/doc/notice（支持筛选与名称解析）。"""
 
 from __future__ import annotations
 
 import time
 
 from ret2console.output import make_table
-from rich.text import Text
 
+from ret2console import service
 from ret2console.api.client import ApiError
-from ret2console.commands import Command, register
+from ret2console.commands import Command, register, report_service_error
 from ret2console.output import console, format_ts, render_markdown
+from ret2console.service import ServiceError
 from ret2console.state import App
+from ret2console.termimg import show_image
 
 
 def _game_status(game: dict) -> str:
@@ -38,45 +40,155 @@ def _fmt_game(game: dict) -> tuple[str, str, str]:
     return str(gid), str(title), status
 
 
+def _host_label(game: dict) -> str:
+    host = game.get("host_type")
+    if host in (0, "0", "Training", "training"):
+        return "练习赛"
+    if host in (1, "1", "Game", "game"):
+        return "正式赛"
+    return "—"
+
+
+def _cell_time(ts) -> str:
+    text = format_ts(ts)
+    return "—" if text in ("None", "") else text
+
+
+def _parse_list_args(args: list[str]) -> tuple[int, int, str | None, str | None]:
+    """解析 --page / --page-size / --type；返回 (page, page_size, host_type, error)。"""
+    page, page_size = 1, 50
+    host_type: str | None = None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("--page", "--page-size", "--type"):
+            if i + 1 >= len(args):
+                return page, page_size, host_type, f"{arg} 需要参数"
+            i += 1
+            value = args[i]
+        elif arg.startswith(("--page=", "--page-size=", "--type=")):
+            arg, _, value = arg.partition("=")
+        else:
+            return page, page_size, host_type, f"未知参数: {arg}"
+        if arg == "--type":
+            if value not in ("training", "game"):
+                return page, page_size, host_type, "--type 只支持 training / game"
+            host_type = value
+        elif not value.isdigit() or int(value) < 1:
+            return page, page_size, host_type, f"{arg} 需要正整数"
+        elif arg == "--page":
+            page = int(value)
+        else:
+            page_size = int(value)
+        i += 1
+    return page, page_size, host_type, None
+
+
 async def cmd_contest_list(app: App, args: list[str]) -> int:
-    try:
-        games = await app.api.list_games()
-    except ApiError as e:
-        console.print(f"[red]✗ {e.message}[/red]")
+    page, page_size, host_type, error = _parse_list_args(args)
+    if error is not None:
+        console.print(f"[red]✗ {error}[/red]")
         return 1
-    app.games_cache = {int(g["id"]): str(g.get("title") or g.get("name") or g["id"]) for g in games if g.get("id") is not None}
+    if not args:
+        # 无 flag：保持全量行为（自动翻页）
+        try:
+            games = await app.api.list_games()
+        except ApiError as e:
+            console.print(f"[red]✗ {e.message}[/red]")
+            return 1
+        app.games_cache = {
+            int(g["id"]): str(g.get("title") or g.get("name") or g["id"])
+            for g in games if g.get("id") is not None
+        }
+        if not games:
+            console.print("（暂无比赛）")
+            return 0
+        table = make_table(title="比赛列表")
+        table.add_column("ID", style="bold #5f87d7")
+        table.add_column("标题")
+        table.add_column("状态", style="dim")
+        for g in games:
+            gid, title, status = _fmt_game(g)
+            table.add_row(gid, title, status)
+        console.print(table)
+        return 0
+    try:
+        data = await service.list_contests(
+            app, page=page, page_size=page_size, host_type=host_type,
+        )
+    except ServiceError as e:
+        return report_service_error(e)
+    games = data["items"]
     if not games:
         console.print("（暂无比赛）")
         return 0
-    table = make_table(title="比赛列表")
+    total = data.get("total")
+    title = "比赛列表"
+    if total is not None:
+        title = f"比赛列表（第 {data['page']} 页 / 共 {total} 场）"
+    table = make_table(title=title)
     table.add_column("ID", style="bold #5f87d7")
     table.add_column("标题")
+    table.add_column("类型", style="dim")
+    table.add_column("开始", style="dim")
+    table.add_column("结束", style="dim")
     table.add_column("状态", style="dim")
     for g in games:
-        gid, title, status = _fmt_game(g)
-        table.add_row(gid, title, status)
+        gid, name, status = _fmt_game(g)
+        table.add_row(
+            gid, name, _host_label(g),
+            _cell_time(g.get("start_at")), _cell_time(g.get("end_at")), status,
+        )
     console.print(table)
     return 0
 
 
 async def cmd_contest_show(app: App, args: list[str]) -> int:
-    if not args:
-        if app.ctx.game_id is None:
-            console.print("[red]用法: contest show <id>[/red]")
-            return 1
-        args = [str(app.ctx.game_id)]
-    try:
-        game = await app.api.get_game(int(args[0]))
-    except (ValueError, ApiError) as e:
-        console.print(f"[red]✗ {getattr(e, 'message', e)}[/red]")
+    intro = "--intro" in args
+    rules = "--rules" in args
+    cover = "--cover" in args
+    if sum((intro, rules, cover)) > 1:
+        console.print("[red]✗ --intro/--rules/--cover 只能选一个[/red]")
         return 1
-    gid = game.get("id")
-    title = game.get("title") or game.get("name") or f"比赛 {gid}"
+    ref = " ".join(a for a in args if a not in ("--intro", "--rules", "--cover")).strip() or None
+    try:
+        gid = await service.resolve_game(app, ref)
+    except ServiceError as e:
+        return report_service_error(e)
+    if intro or rules:
+        doc = "readme" if intro else "rules"
+        try:
+            text = await service.get_contest_doc(app, gid, doc)
+        except ServiceError as e:
+            return report_service_error(e)
+        console.print(render_markdown(text) if text else "（文档为空）")
+        return 0
+    try:
+        game = await service.get_contest(app, gid)
+    except ServiceError as e:
+        return report_service_error(e)
+    if cover:
+        cover_hash = game.get("cover")
+        if not cover_hash:
+            console.print("[red]✗ 该比赛没有封面[/red]")
+            return 1
+        try:
+            data = await app.api.download_bytes("/media", params={"hash": cover_hash})
+        except ApiError as e:
+            console.print(f"[red]✗ {e.message}[/red]")
+            return 1
+        if app.graphics and data and show_image(data, app.graphics, console.width):
+            return 0
+        console.print(f"/api/media?hash={cover_hash}")
+        return 0
+    gid_value = game.get("id") or gid
+    app.games_cache[int(gid)] = str(game.get("title") or game.get("name") or gid)
+    title = game.get("title") or game.get("name") or f"比赛 {gid_value}"
     brief = game.get("brief") or game.get("description") or "（无简介）"
     table = make_table(show_header=False)
     table.add_column("字段", style="dim", width=10)
     table.add_column("值")
-    table.add_row("ID", str(gid))
+    table.add_row("ID", str(gid_value))
     table.add_row("标题", str(title))
     table.add_row("状态", _game_status(game) or "—")
     table.add_row("简介", str(brief))
@@ -84,52 +196,48 @@ async def cmd_contest_show(app: App, args: list[str]) -> int:
     end = format_ts(game.get("end_at"))
     table.add_row("时间", f"{start} ~ {end}" if start != "None" else "—")
     console.print(table)
-    if gid is not None:
-        console.print(f"[dim]提示: cd /contests/{gid} 进入该比赛上下文[/dim]")
+    if gid_value is not None:
+        console.print(f"[dim]提示: cd /contests/{gid_value} 进入该比赛上下文[/dim]")
     return 0
 
 
 async def cmd_contest_use(app: App, args: list[str]) -> int:
-    if not args:
-        console.print("[red]用法: contest use <id>[/red]")
+    ref = " ".join(args).strip() or None
+    if ref is None:
+        console.print("[red]用法: contest use <比赛>[/red]")
         return 1
     try:
-        gid = int(args[0])
-    except ValueError:
-        console.print(f"[red]✗ 无效的比赛 id: {args[0]}[/red]")
-        return 1
+        gid = await service.resolve_game(app, ref)
+        game = await service.get_contest(app, gid)
+    except ServiceError as e:
+        return report_service_error(e)
+    app.games_cache[int(gid)] = str(game.get("title") or game.get("name") or gid)
     app.ctx.set_game(gid)
     console.print(f"已进入比赛 [bold]{gid}[/bold]，当前路径 [bold]{app.ctx.vfs_path}[/bold]")
     return 0
 
 
 async def cmd_contest_doc(app: App, args: list[str]) -> int:
-    if len(args) < 1:
-        console.print("[red]用法: contest doc <id> [readme|training|rules][/red]")
-        return 1
-    gid = int(args[0])
-    doc_type = args[1] if len(args) > 1 else "readme"
+    rest = list(args)
+    doc_type = "readme"
+    if rest and rest[-1] in ("readme", "training", "rules"):
+        doc_type = rest.pop()
+    ref = " ".join(rest).strip() or None
     try:
-        text = await app.api.get_game_doc(gid, doc_type)
-    except ApiError as e:
-        console.print(f"[red]✗ {e.message}[/red]")
-        return 1
-    console.print(render_markdown(text))
+        gid = await service.resolve_game(app, ref)
+        text = await service.get_contest_doc(app, gid, doc_type)
+    except ServiceError as e:
+        return report_service_error(e)
+    console.print(render_markdown(text) if text else "（文档为空）")
     return 0
 
 
 async def cmd_contest_notice(app: App, args: list[str]) -> int:
-    gid = app.ctx.game_id if not args else int(args[0])
-    if gid is None:
-        console.print("[yellow]! 未指定比赛（当前不在任何比赛上下文），用法: contest notice <id>[/yellow]")
-        if not args:
-            return 1
-        return 1
+    ref = " ".join(args).strip() or None
     try:
-        notices = await app.api.get_notifications(gid)
-    except ApiError as e:
-        console.print(f"[red]✗ {e.message}[/red]")
-        return 1
+        notices = await service.get_contest_notices(app, ref)
+    except ServiceError as e:
+        return report_service_error(e)
     if not notices:
         console.print("（暂无比赛通知）")
         return 0
@@ -144,7 +252,11 @@ async def cmd_contest_notice(app: App, args: list[str]) -> int:
 
 
 def register_contest() -> None:
-    register(Command("contest", _contest_dispatch, usage="contest <list|show|use|doc|notice> ...", description="比赛浏览与上下文管理", category="比赛"))
+    register(Command(
+        "contest", _contest_dispatch,
+        usage="contest <list|show|use|doc|notice> ...",
+        description="比赛浏览与上下文管理（支持名称/id 解析）", category="比赛",
+    ))
 
 
 async def _contest_dispatch(app: App, args: list[str]) -> int:
